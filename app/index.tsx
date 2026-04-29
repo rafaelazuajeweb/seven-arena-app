@@ -12,6 +12,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import * as SplashScreen from 'expo-splash-screen';
 import SplashOverlay from '../components/SplashOverlay';
+import NetworkBanner from '../components/NetworkBanner';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
@@ -141,6 +142,7 @@ export default function Home() {
           <Text style={styles.errorBody}>{errorMessage}</Text>
           <Text style={styles.errorHint}>Desliza hacia abajo para reintentar.</Text>
         </ScrollView>
+        <NetworkBanner />
       </SafeAreaView>
     );
   }
@@ -168,6 +170,7 @@ export default function Home() {
           style={styles.webView}
         />
         <SplashOverlay visible={splashVisible} />
+        <NetworkBanner />
       </View>
     </SafeAreaView>
   );
