@@ -11,10 +11,37 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { WebView, WebViewMessageEvent } from 'react-native-webview';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
+import * as Notifications from 'expo-notifications';
 import * as SplashScreen from 'expo-splash-screen';
 import SplashOverlay from '../components/SplashOverlay';
 import NetworkBanner from '../components/NetworkBanner';
 import { createNativeBridge, isBridgeEnvelope, type NativeBridge } from '../lib/native-bridge';
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
+
+if (Platform.OS === 'android') {
+  Notifications.setNotificationChannelAsync('default', {
+    name: 'default',
+    importance: Notifications.AndroidImportance.MAX,
+    vibrationPattern: [0, 250, 250, 250],
+    lightColor: '#34F3C6',
+  }).catch(() => {});
+}
+
+async function ensureNotificationPermission(): Promise<boolean> {
+  const existing = await Notifications.getPermissionsAsync();
+  if (existing.status === 'granted') return true;
+  const requested = await Notifications.requestPermissionsAsync();
+  return requested.status === 'granted';
+}
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
@@ -69,6 +96,19 @@ export default function Home() {
       appVersion: Constants.expoConfig?.version ?? null,
       protocol: 1,
     }));
+    bridge.registerHandler('notify.local', async (payload) => {
+      const data = (payload ?? {}) as { title?: unknown; body?: unknown };
+      const title = String(data.title ?? 'Seven Arena').slice(0, 100);
+      const body = String(data.body ?? '').slice(0, 500).trim();
+      if (!body) throw new Error('El cuerpo de la notificación no puede estar vacío.');
+      const granted = await ensureNotificationPermission();
+      if (!granted) throw new Error('Permiso de notificaciones denegado.');
+      const id = await Notifications.scheduleNotificationAsync({
+        content: { title, body, sound: true },
+        trigger: null,
+      });
+      return { id, title, body, sent: true };
+    });
     bridgeRef.current = bridge;
   }
 
