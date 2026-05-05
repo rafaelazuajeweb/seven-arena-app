@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Platform,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -13,6 +14,7 @@ import Constants from 'expo-constants';
 import * as SplashScreen from 'expo-splash-screen';
 import SplashOverlay from '../components/SplashOverlay';
 import NetworkBanner from '../components/NetworkBanner';
+import { createNativeBridge, isBridgeEnvelope, type NativeBridge } from '../lib/native-bridge';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
@@ -53,6 +55,22 @@ export default function Home() {
   const [splashVisible, setSplashVisible] = useState(true);
   const mountedAt = useRef(Date.now());
   const nativeSplashHidden = useRef(false);
+  const webViewRef = useRef<WebView | null>(null);
+  const bridgeRef = useRef<NativeBridge | null>(null);
+  if (bridgeRef.current === null) {
+    const bridge = createNativeBridge(webViewRef);
+    bridge.registerHandler('auth.session', async (payload) => {
+      await AsyncStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(payload));
+      return { saved: true };
+    });
+    bridge.registerHandler('device.info', async () => ({
+      os: Platform.OS,
+      osVersion: String(Platform.Version),
+      appVersion: Constants.expoConfig?.version ?? null,
+      protocol: 1,
+    }));
+    bridgeRef.current = bridge;
+  }
 
   const startUrl = useMemo(() => {
     const base = getWebUrl();
@@ -88,9 +106,19 @@ export default function Home() {
   const handleMessage = useCallback(async (event: WebViewMessageEvent) => {
     const raw = event.nativeEvent?.data;
     if (!raw) return;
+
+    // Bridge-versioned envelopes route through the dispatcher.
+    if (isBridgeEnvelope(raw) && bridgeRef.current) {
+      await bridgeRef.current.handleIncoming(raw);
+      return;
+    }
+
+    // Legacy fire-and-forget session payload from older builds of /m/login.
     try {
       const payload = JSON.parse(raw) as IncomingMessage;
-      await AsyncStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(payload));
+      if (payload && typeof payload === 'object' && 'kind' in payload) {
+        await AsyncStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(payload));
+      }
     } catch {
       // not JSON we expect — ignore
     }
@@ -152,6 +180,7 @@ export default function Home() {
       <View style={styles.webContainer}>
         <WebView
           key={refreshKey}
+          ref={webViewRef}
           source={{ uri: startUrl }}
           onMessage={handleMessage}
           onLoadEnd={handleLoadEnd}
