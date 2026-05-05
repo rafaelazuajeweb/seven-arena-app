@@ -1,64 +1,67 @@
-# JS ↔ Native Bridge
+# Bridge JS ↔ Nativo
 
-Bidirectional message bridge between the Next.js web app loaded inside the
-WebView (`frontend/`) and the React Native shell (`seven-arena-app/`).
+Puente bidireccional de mensajes entre la aplicación web Next.js cargada
+dentro del WebView (`frontend/`) y el contenedor React Native
+(`seven-arena-app/`).
 
-The bridge supports three patterns:
+El bridge soporta tres patrones de comunicación:
 
-- **Fire-and-forget from web → native** (`bridge.send`)
-- **Request / response from web → native** (`bridge.request`, returns a Promise)
-- **Spontaneous push from native → web** (`bridge.emit`, with web-side `bridge.on`)
+- **Disparar y olvidar de web → nativo** (`bridge.send`)
+- **Solicitud / respuesta de web → nativo** (`bridge.request`, devuelve una Promise)
+- **Notificación espontánea de nativo → web** (`bridge.emit` en RN, con `bridge.on` en web)
 
-Built on top of `react-native-webview`'s `postMessage` (web → native) and
-`webViewRef.injectJavaScript` (native → web). Both directions are wrapped in
-a single envelope schema with versioning, optional message ids for response
-correlation, and uniform error handling.
+Construido sobre `postMessage` de `react-native-webview` (web → nativo) y
+`webViewRef.injectJavaScript` (nativo → web). Ambas direcciones se envuelven
+en un único esquema de sobre con versionado, identificadores opcionales para
+correlacionar respuestas y manejo uniforme de errores.
 
 ---
 
-## 1. Envelope schema
+## 1. Esquema del sobre
 
-Every message — in either direction — is JSON of the form:
+Todos los mensajes — en cualquier dirección — son JSON con la forma:
 
 ```jsonc
 {
-  "v": 1,                  // protocol version. Receivers MUST ignore other values.
-  "id": "abc123",          // optional. Present on requests and on their matching response.
-  "type": "auth.session",  // namespaced event/method name. REQUIRED.
-  "payload": {  },         // optional, free-form per type.
+  "v": 1,                  // Versión del protocolo. Los receptores DEBEN ignorar otros valores.
+  "id": "abc123",          // Opcional. Presente en solicitudes y en su respuesta correlacionada.
+  "type": "auth.session",  // Nombre del evento o método (con namespace). REQUERIDO.
+  "payload": { },          // Opcional, formato libre según el tipo.
 
-  // Only present on responses (native → web for a request):
-  "ok": true,              // false on error
-  "error": "…"             // human-readable message when ok === false
+  // Solo presente en respuestas (nativo → web tras una solicitud):
+  "ok": true,              // false si hubo error
+  "error": "…"             // mensaje legible cuando ok === false
 }
 ```
 
-A receiver that gets a malformed JSON, an unknown `v`, or a missing `type`
-silently drops the message. The bridge never throws into the host app.
+Si un receptor recibe JSON malformado, una `v` desconocida o le falta `type`,
+descarta el mensaje silenciosamente. El bridge nunca lanza excepciones hacia
+la aplicación que lo aloja.
 
 ---
 
-## 2. Web side API (`frontend/lib/native-bridge.ts`)
+## 2. API del lado web (`frontend/lib/native-bridge.ts`)
 
 ```ts
 import { send, request, on, off, isAvailable } from "@/lib/native-bridge";
 ```
 
-| Function | Description |
-|----------|-------------|
-| `isAvailable(): boolean` | `true` if running inside the WebView (and therefore the native side will receive messages). Always `false` in a regular browser. |
-| `send(type, payload?): void` | Fire-and-forget. No response expected. |
-| `request<T>(type, payload?, opts?): Promise<T>` | Sends and waits for a matching response. Default timeout 5000 ms; configurable via `opts.timeoutMs`. Rejects on timeout, on `ok: false` from native, or if `isAvailable()` is `false`. |
-| `on(type, handler): () => void` | Subscribe to spontaneous events from native (e.g. `network.status`, `app.background`). Returns an unsubscribe function. |
-| `off(type, handler): void` | Manual unsubscribe. |
+| Función | Descripción |
+|---------|-------------|
+| `isAvailable(): boolean` | `true` si está corriendo dentro del WebView (y por lo tanto el lado nativo va a recibir los mensajes). Siempre `false` en un navegador convencional. |
+| `send(type, payload?): void` | Disparar y olvidar. No espera respuesta. |
+| `request<T>(type, payload?, opts?): Promise<T>` | Envía y espera la respuesta correlacionada. Timeout por defecto 5000 ms; configurable con `opts.timeoutMs`. Rechaza si vence el timeout, si el nativo responde `ok: false`, o si `isAvailable()` es `false`. |
+| `on(type, handler): () => void` | Suscribirse a eventos espontáneos del nativo (ej: `network.status`, `app.background`). Devuelve una función para desuscribirse. |
+| `off(type, handler): void` | Desuscribir manualmente. |
 
-The module installs `window.__sevenNativeReceive` on import. The native side
-uses that hook to deliver messages — keep `frontend/app/providers.tsx`
-importing `@/lib/native-bridge` so the hook is registered on every route.
+El módulo instala `window.__sevenNativeReceive` al ser importado. El lado
+nativo usa ese hook para entregar los mensajes — mantén
+`frontend/app/providers.tsx` importando `@/lib/native-bridge` para que el
+hook quede registrado en cualquier ruta del SPA.
 
 ---
 
-## 3. Native side API (`seven-arena-app/lib/native-bridge.ts`)
+## 3. API del lado nativo (`seven-arena-app/lib/native-bridge.ts`)
 
 ```ts
 import { createNativeBridge, isBridgeEnvelope } from '../lib/native-bridge';
@@ -71,7 +74,7 @@ bridge.registerHandler('auth.session', async (payload) => {
   return { saved: true };
 });
 
-// Inside <WebView onMessage={...}>:
+// Dentro de <WebView onMessage={...}>:
 const handleMessage = async (e) => {
   const raw = e.nativeEvent?.data;
   if (!raw) return;
@@ -79,52 +82,53 @@ const handleMessage = async (e) => {
 };
 ```
 
-| Function | Description |
-|----------|-------------|
-| `createNativeBridge(webViewRef)` | Creates a bridge instance bound to a `WebView` ref. |
-| `bridge.registerHandler(type, fn)` | Registers a handler. The return value (or thrown error) is what the web's `bridge.request` resolves/rejects with. Sync or async. |
-| `bridge.unregisterHandler(type)` | Removes a handler. |
-| `bridge.emit(type, payload?)` | Pushes a spontaneous event to the web (subscribed via `bridge.on`). |
-| `bridge.handleIncoming(raw)` | Call from `onMessage`. Parses, routes, responds. No-op if `raw` isn't a valid envelope. |
-| `isBridgeEnvelope(raw)` | Guard so the WebView's `onMessage` can route bridge messages here and forward legacy payloads elsewhere. |
+| Función | Descripción |
+|---------|-------------|
+| `createNativeBridge(webViewRef)` | Crea una instancia del bridge atada a un ref del `WebView`. |
+| `bridge.registerHandler(type, fn)` | Registra un handler. El valor que retorne (o el error que lance) es lo que va a resolver/rechazar el `bridge.request` del lado web. Sync o async. |
+| `bridge.unregisterHandler(type)` | Quita un handler. |
+| `bridge.emit(type, payload?)` | Empuja un evento espontáneo al lado web (que se suscribe con `bridge.on`). |
+| `bridge.handleIncoming(raw)` | Llamarlo desde `onMessage`. Parsea, rutea, responde. No hace nada si `raw` no es un sobre válido. |
+| `isBridgeEnvelope(raw)` | Guard para que el `onMessage` del WebView pueda enrutar mensajes del bridge a este módulo y reenviar payloads legacy a otro lado. |
 
 ---
 
-## 4. Registered handlers (native side)
+## 4. Handlers registrados (lado nativo)
 
-These are wired in `seven-arena-app/app/index.tsx`:
+Estos están conectados en `seven-arena-app/app/index.tsx`:
 
-| `type` | Direction | Request payload | Response payload | Errors |
-|--------|-----------|-----------------|------------------|--------|
-| `auth.session` | web → native | `{ kind: "athlete" \| "driver" \| "admin", role, …profile }` | `{ saved: true }` | AsyncStorage failure |
-| `device.info` | web → native | _none_ | `{ os, osVersion, appVersion, protocol }` | _none_ |
+| `type` | Dirección | Payload de solicitud | Payload de respuesta | Errores |
+|--------|-----------|----------------------|----------------------|---------|
+| `auth.session` | web → nativo | `{ kind: "athlete" \| "driver" \| "admin", role, …profile }` | `{ saved: true }` | Falla del AsyncStorage |
+| `device.info` | web → nativo | _ninguno_ | `{ os, osVersion, appVersion, protocol }` | _ninguno_ |
 
-Add new handlers here as we extend the bridge for tracking, push, camera, etc.
-Always document the new type in this table when you register it.
+Agregá nuevos handlers acá a medida que extendamos el bridge para tracking,
+push, cámara, etc. Documentá siempre el nuevo tipo en esta tabla cuando lo
+registres.
 
 ---
 
-## 5. Spontaneous events (native → web)
+## 5. Eventos espontáneos (nativo → web)
 
-These don't exist yet but the channel is ready. Examples planned:
+Aún no existen, pero el canal ya está listo. Ejemplos planeados:
 
-| `type` | Direction | Payload | Trigger |
+| `type` | Dirección | Payload | Disparo |
 |--------|-----------|---------|---------|
-| `network.status` | native → web | `{ online: boolean }` | NetInfo state change in the RN shell |
-| `push.token` | native → web | `{ token: string, platform: "ios" \| "android" }` | After Expo notifications registers the device |
-| `app.foreground` / `app.background` | native → web | `{}` | `AppState` transitions |
-| `tracking.position` | native → web | `{ lat, lng, speed?, heading?, ts }` | Background-location updates while a trip is active |
+| `network.status` | nativo → web | `{ online: boolean }` | Cambio de estado del NetInfo en el contenedor RN |
+| `push.token` | nativo → web | `{ token: string, platform: "ios" \| "android" }` | Después de que Expo notifications registre el dispositivo |
+| `app.foreground` / `app.background` | nativo → web | `{}` | Transiciones del `AppState` |
+| `tracking.position` | nativo → web | `{ lat, lng, speed?, heading?, ts }` | Updates de ubicación en background mientras hay un viaje activo |
 
-To dispatch one from native: `bridge.emit("network.status", { online: false });`
+Para emitir uno desde el nativo: `bridge.emit("network.status", { online: false });`
 
-To receive one on the web:
+Para recibirlo desde la web:
 
 ```ts
 import { on } from "@/lib/native-bridge";
 
 useEffect(() => {
   const off = on("network.status", (payload) => {
-    console.log("network changed", payload);
+    console.log("cambió la red", payload);
   });
   return off;
 }, []);
@@ -132,12 +136,12 @@ useEffect(() => {
 
 ---
 
-## 6. End-to-end examples
+## 6. Ejemplos punta a punta
 
-### a) Fire-and-forget: persist session after login
+### a) Disparar y olvidar: persistir sesión tras login
 
 ```ts
-// frontend/app/m/login/page.tsx (after successful mobileLogin)
+// frontend/app/m/login/page.tsx (después de un mobileLogin exitoso)
 import { send } from "@/lib/native-bridge";
 
 send("auth.session", {
@@ -148,7 +152,7 @@ send("auth.session", {
 });
 ```
 
-### b) Request/response: read device info
+### b) Solicitud / respuesta: leer info del dispositivo
 
 ```ts
 import { request, isAvailable } from "@/lib/native-bridge";
@@ -161,14 +165,14 @@ if (isAvailable()) {
       appVersion: string | null;
       protocol: number;
     }>("device.info", undefined, { timeoutMs: 2000 });
-    console.log("[native]", info);
+    console.log("[nativo]", info);
   } catch (err) {
-    console.warn("device.info failed", err);
+    console.warn("device.info falló", err);
   }
 }
 ```
 
-### c) Subscribe to a native push
+### c) Suscribirse a un push del nativo
 
 ```ts
 import { on } from "@/lib/native-bridge";
@@ -183,35 +187,38 @@ useEffect(() => {
 
 ---
 
-## 7. Error handling guarantees
+## 7. Garantías de manejo de errores
 
-- Web side: `request` rejects on timeout, on `{ ok: false }`, or if not in a
-  WebView. `send` and `on` are no-ops outside a WebView; no exceptions
-  bubble.
-- Native side: handler exceptions are caught and translated into
-  `{ ok: false, error: <message> }`. Bad JSON is dropped silently. Missing
-  handlers respond with `{ ok: false, error: "no handler registered…" }` so
-  the web's promise rejects rather than hangs.
-- Either side missing or the other side gone (e.g. WebView reload mid-flight)
-  → the request times out and rejects; nothing crashes.
-
----
-
-## 8. Cross-platform notes (iOS / Android)
-
-- `react-native-webview`'s `postMessage` and `injectJavaScript` are
-  symmetrical on iOS and Android, so the same envelope works on both.
-- The injection script wraps the call in an IIFE and a `try/catch`, so a
-  WebView that hasn't loaded the bridge module yet (e.g. message arrives
-  during page navigation) won't error out.
-- `window.__sevenNativeReceive` is registered by the side-effect import in
-  `frontend/app/providers.tsx`, ensuring it exists on every route the
-  WebView might navigate to.
+- **Lado web:** `request` rechaza por timeout, por `{ ok: false }` desde el
+  nativo, o si no estamos dentro de un WebView. `send` y `on` no hacen nada
+  fuera de un WebView; ninguna excepción escapa.
+- **Lado nativo:** las excepciones del handler se atrapan y se traducen a
+  `{ ok: false, error: <mensaje> }`. El JSON inválido se descarta en
+  silencio. Los handlers ausentes responden con
+  `{ ok: false, error: "no handler registered…" }` para que la promesa del
+  web rechace en lugar de quedarse colgada.
+- Si falta uno de los dos lados, o el otro desaparece a mitad de camino
+  (ej: el WebView recarga durante una llamada) → la solicitud expira y
+  rechaza; nada crashea.
 
 ---
 
-## 9. Backwards compatibility
+## 8. Notas multiplataforma (iOS / Android)
 
-The native `onMessage` handler still accepts the original fire-and-forget
-session payload (`{ kind, role, athleteId/driverId, profile }`) so existing
-APKs in the field keep working until they're upgraded.
+- `postMessage` y `injectJavaScript` de `react-native-webview` son
+  simétricos en iOS y Android, así que el mismo sobre funciona en ambos.
+- El script inyectado va envuelto en una IIFE y un `try/catch`, así que un
+  WebView que aún no cargó el módulo del bridge (ej: un mensaje llega
+  durante una navegación) no genera error.
+- `window.__sevenNativeReceive` lo registra el import por efecto colateral
+  en `frontend/app/providers.tsx`, asegurando que existe en cualquier ruta
+  a la que el WebView pueda navegar.
+
+---
+
+## 9. Compatibilidad hacia atrás
+
+El handler `onMessage` del nativo todavía acepta el payload original de
+disparar-y-olvidar para sesión (`{ kind, role, athleteId/driverId, profile }`)
+para que las APKs ya distribuidas en campo sigan funcionando hasta que se
+actualicen.
