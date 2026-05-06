@@ -11,11 +11,19 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { WebView, WebViewMessageEvent } from 'react-native-webview';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
+import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 import * as SplashScreen from 'expo-splash-screen';
 import SplashOverlay from '../components/SplashOverlay';
 import NetworkBanner from '../components/NetworkBanner';
+import OnboardingScreen from '../components/OnboardingScreen';
 import { createNativeBridge, isBridgeEnvelope, type NativeBridge } from '../lib/native-bridge';
+import {
+  getPermissionsStatus,
+  openSystemSettings,
+  requestPermission,
+  type PermissionKind,
+} from '../lib/permissions';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -36,16 +44,10 @@ if (Platform.OS === 'android') {
   }).catch(() => {});
 }
 
-async function ensureNotificationPermission(): Promise<boolean> {
-  const existing = await Notifications.getPermissionsAsync();
-  if (existing.status === 'granted') return true;
-  const requested = await Notifications.requestPermissionsAsync();
-  return requested.status === 'granted';
-}
-
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
 const SESSION_STORAGE_KEY = 'seven.session';
+const ONBOARDED_KEY = 'seven.onboarded';
 const SPLASH_MIN_DURATION_MS = 900;
 
 const getWebUrl = (): string | null => {
@@ -80,6 +82,7 @@ export default function Home() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [splashVisible, setSplashVisible] = useState(true);
+  const [onboardingDone, setOnboardingDone] = useState<boolean | null>(null);
   const mountedAt = useRef(Date.now());
   const nativeSplashHidden = useRef(false);
   const webViewRef = useRef<WebView | null>(null);
@@ -90,24 +93,46 @@ export default function Home() {
       await AsyncStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(payload));
       return { saved: true };
     });
-    bridge.registerHandler('device.info', async () => ({
-      os: Platform.OS,
-      osVersion: String(Platform.Version),
-      appVersion: Constants.expoConfig?.version ?? null,
-      protocol: 1,
-    }));
-    bridge.registerHandler('notify.local', async (payload) => {
-      const data = (payload ?? {}) as { title?: unknown; body?: unknown };
-      const title = String(data.title ?? 'Seven Arena').slice(0, 100);
-      const body = String(data.body ?? '').slice(0, 500).trim();
-      if (!body) throw new Error('El cuerpo de la notificación no puede estar vacío.');
-      const granted = await ensureNotificationPermission();
-      if (!granted) throw new Error('Permiso de notificaciones denegado.');
-      const id = await Notifications.scheduleNotificationAsync({
-        content: { title, body, sound: true },
-        trigger: null,
-      });
-      return { id, title, body, sent: true };
+    bridge.registerHandler('permissions.status', async () => {
+      return await getPermissionsStatus();
+    });
+    bridge.registerHandler('permissions.request', async (payload) => {
+      const kind = (payload as { kind?: unknown } | undefined)?.kind;
+      if (kind !== 'notifications' && kind !== 'location') {
+        throw new Error('kind debe ser "notifications" o "location"');
+      }
+      const state = await requestPermission(kind as PermissionKind);
+      return { kind, state };
+    });
+    bridge.registerHandler('device.open-settings', async () => {
+      await openSystemSettings();
+      return { opened: true };
+    });
+    bridge.registerHandler('location.current', async () => {
+      const perm = await Location.getForegroundPermissionsAsync();
+      if (perm.status !== 'granted') {
+        const err = new Error(
+          perm.canAskAgain
+            ? 'Permiso de ubicación no concedido'
+            : 'Permiso de ubicación bloqueado en Ajustes',
+        );
+        (err as Error & { code?: string }).code = perm.canAskAgain
+          ? 'PERMISSION_DENIED'
+          : 'PERMISSION_BLOCKED';
+        throw err;
+      }
+      const last = await Location.getLastKnownPositionAsync();
+      const pos =
+        last ??
+        (await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        }));
+      return {
+        lat: pos.coords.latitude,
+        lng: pos.coords.longitude,
+        accuracy: pos.coords.accuracy,
+        ts: pos.timestamp,
+      };
     });
     bridgeRef.current = bridge;
   }
@@ -186,6 +211,17 @@ export default function Home() {
     }
   }, [startUrl, hideNativeSplash]);
 
+  useEffect(() => {
+    AsyncStorage.getItem(ONBOARDED_KEY)
+      .then((value) => setOnboardingDone(!!value))
+      .catch(() => setOnboardingDone(true));
+  }, []);
+
+  const finishOnboarding = useCallback(() => {
+    AsyncStorage.setItem(ONBOARDED_KEY, '1').catch(() => {});
+    setOnboardingDone(true);
+  }, []);
+
   if (!startUrl) {
     return (
       <SafeAreaView style={styles.errorContainer}>
@@ -213,6 +249,11 @@ export default function Home() {
         <NetworkBanner />
       </SafeAreaView>
     );
+  }
+
+  if (onboardingDone === false) {
+    hideNativeSplash();
+    return <OnboardingScreen onDone={finishOnboarding} />;
   }
 
   return (

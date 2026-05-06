@@ -10,7 +10,10 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.sevenarena.app"
+      "bundleIdentifier": "com.sevenarena.app",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Seven Arena usa tu ubicación para mostrarte rutas y traslados cercanos."
+      }
     },
     "android": {
       "package": "com.sevenarena.app",
@@ -29,6 +32,12 @@
     "plugins": [
       "expo-router",
       "expo-notifications",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Seven Arena usa tu ubicación para mostrarte rutas y traslados cercanos."
+        }
+      ],
       [
         "expo-splash-screen",
         {

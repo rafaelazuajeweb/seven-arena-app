@@ -100,7 +100,10 @@ Estos están conectados en `seven-arena-app/app/index.tsx`:
 | `type` | Dirección | Payload de solicitud | Payload de respuesta | Errores |
 |--------|-----------|----------------------|----------------------|---------|
 | `auth.session` | web → nativo | `{ kind: "athlete" \| "driver" \| "admin", role, …profile }` | `{ saved: true }` | Falla del AsyncStorage |
-| `device.info` | web → nativo | _ninguno_ | `{ os, osVersion, appVersion, protocol }` | _ninguno_ |
+| `permissions.status` | web → nativo | _ninguno_ | `{ notifications: estado, location: estado }` donde estado es `"granted" \| "denied" \| "undetermined" \| "blocked"` | _ninguno_ |
+| `permissions.request` | web → nativo | `{ kind: "notifications" \| "location" }` | `{ kind, state }` con el estado resultante | `kind` inválido |
+| `device.open-settings` | web → nativo | _ninguno_ | `{ opened: true }` | _ninguno_ (fire-and-forget en la práctica) |
+| `location.current` | web → nativo | _ninguno_ | `{ lat, lng, accuracy, ts }` | `PERMISSION_DENIED` o `PERMISSION_BLOCKED` si no hay permiso; falla del GPS |
 
 Agregá nuevos handlers acá a medida que extendamos el bridge para tracking,
 push, cámara, etc. Documentá siempre el nuevo tipo en esta tabla cuando lo
@@ -152,27 +155,7 @@ send("auth.session", {
 });
 ```
 
-### b) Solicitud / respuesta: leer info del dispositivo
-
-```ts
-import { request, isAvailable } from "@/lib/native-bridge";
-
-if (isAvailable()) {
-  try {
-    const info = await request<{
-      os: string;
-      osVersion: string;
-      appVersion: string | null;
-      protocol: number;
-    }>("device.info", undefined, { timeoutMs: 2000 });
-    console.log("[nativo]", info);
-  } catch (err) {
-    console.warn("device.info falló", err);
-  }
-}
-```
-
-### c) Suscribirse a un push del nativo
+### b) Suscribirse a un push del nativo
 
 ```ts
 import { on } from "@/lib/native-bridge";
