@@ -100,8 +100,8 @@ Estos están conectados en `seven-arena-app/app/index.tsx`:
 | `type` | Dirección | Payload de solicitud | Payload de respuesta | Errores |
 |--------|-----------|----------------------|----------------------|---------|
 | `auth.session` | web → nativo | `{ kind: "athlete" \| "driver" \| "admin", role, …profile }` | `{ saved: true }` | Falla del AsyncStorage |
-| `permissions.status` | web → nativo | _ninguno_ | `{ notifications: estado, location: estado }` donde estado es `"granted" \| "denied" \| "undetermined" \| "blocked"` | _ninguno_ |
-| `permissions.request` | web → nativo | `{ kind: "notifications" \| "location" }` | `{ kind, state }` con el estado resultante | `kind` inválido |
+| `permissions.status` | web → nativo | _ninguno_ | `{ notifications, location, camera, gallery }` cada uno `"granted" \| "denied" \| "undetermined" \| "blocked"` | _ninguno_ |
+| `permissions.request` | web → nativo | `{ kind: "notifications" \| "location" \| "camera" \| "gallery" }` | `{ kind, state }` con el estado resultante | `kind` inválido |
 | `device.open-settings` | web → nativo | _ninguno_ | `{ opened: true }` | _ninguno_ (fire-and-forget en la práctica) |
 | `location.current` | web → nativo | _ninguno_ | `{ lat, lng, accuracy, ts }` | `PERMISSION_DENIED` o `PERMISSION_BLOCKED` si no hay permiso; falla del GPS |
 | `push.token` | web → nativo | _ninguno_ | `{ token, platform: "ios" \| "android" }` con el Expo push token | `NO_TOKEN` si no hay permiso, no hay projectId EAS, o el dispositivo no soporta push (simulador) |

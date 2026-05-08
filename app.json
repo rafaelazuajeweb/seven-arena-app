@@ -12,7 +12,10 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.sevenarena.app",
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "Seven Arena usa tu ubicación para mostrarte rutas y traslados cercanos."
+        "NSLocationWhenInUseUsageDescription": "Seven Arena usa tu ubicación para mostrarte rutas y traslados cercanos.",
+        "NSCameraUsageDescription": "Seven Arena usa la cámara para tomar fotos de credenciales y documentos.",
+        "NSPhotoLibraryUsageDescription": "Seven Arena accede a tu galería para subir fotos y documentos.",
+        "NSPhotoLibraryAddUsageDescription": "Seven Arena guarda comprobantes en tu galería cuando lo solicitas."
       }
     },
     "android": {
@@ -37,6 +40,13 @@
         "expo-location",
         {
           "locationWhenInUsePermission": "Seven Arena usa tu ubicación para mostrarte rutas y traslados cercanos."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Seven Arena accede a tu galería para subir fotos y documentos.",
+          "cameraPermission": "Seven Arena usa la cámara para tomar fotos de credenciales y documentos."
         }
       ],
       [

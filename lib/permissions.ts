@@ -1,34 +1,55 @@
 import * as Notifications from 'expo-notifications';
 import * as Location from 'expo-location';
+import * as ImagePicker from 'expo-image-picker';
 import { Linking, Platform } from 'react-native';
 
-export type PermissionKind = 'notifications' | 'location';
+export type PermissionKind =
+  | 'notifications'
+  | 'location'
+  | 'camera'
+  | 'gallery';
 export type PermissionState = 'granted' | 'denied' | 'undetermined' | 'blocked';
 
 export type PermissionsStatus = {
   notifications: PermissionState;
   location: PermissionState;
+  camera: PermissionState;
+  gallery: PermissionState;
 };
 
-export async function getPermissionState(kind: PermissionKind): Promise<PermissionState> {
-  if (kind === 'notifications') {
-    const res = await Notifications.getPermissionsAsync();
-    if (res.status === 'granted') return 'granted';
-    if (res.status === 'undetermined') return 'undetermined';
-    return res.canAskAgain ? 'denied' : 'blocked';
-  }
-  const res = await Location.getForegroundPermissionsAsync();
+type ExpoPermLike = {
+  status: 'granted' | 'denied' | 'undetermined';
+  canAskAgain?: boolean;
+};
+
+function normalize(res: ExpoPermLike): PermissionState {
   if (res.status === 'granted') return 'granted';
   if (res.status === 'undetermined') return 'undetermined';
   return res.canAskAgain ? 'denied' : 'blocked';
 }
 
+export async function getPermissionState(kind: PermissionKind): Promise<PermissionState> {
+  if (kind === 'notifications') {
+    return normalize(await Notifications.getPermissionsAsync());
+  }
+  if (kind === 'location') {
+    return normalize(await Location.getForegroundPermissionsAsync());
+  }
+  if (kind === 'camera') {
+    return normalize(await ImagePicker.getCameraPermissionsAsync());
+  }
+  // gallery
+  return normalize(await ImagePicker.getMediaLibraryPermissionsAsync());
+}
+
 export async function getPermissionsStatus(): Promise<PermissionsStatus> {
-  const [notifications, location] = await Promise.all([
+  const [notifications, location, camera, gallery] = await Promise.all([
     getPermissionState('notifications'),
     getPermissionState('location'),
+    getPermissionState('camera'),
+    getPermissionState('gallery'),
   ]);
-  return { notifications, location };
+  return { notifications, location, camera, gallery };
 }
 
 export async function requestPermission(kind: PermissionKind): Promise<PermissionState> {
@@ -36,14 +57,16 @@ export async function requestPermission(kind: PermissionKind): Promise<Permissio
   if (current === 'granted' || current === 'blocked') return current;
 
   if (kind === 'notifications') {
-    const res = await Notifications.requestPermissionsAsync();
-    if (res.status === 'granted') return 'granted';
-    return res.canAskAgain ? 'denied' : 'blocked';
+    return normalize(await Notifications.requestPermissionsAsync());
   }
-
-  const res = await Location.requestForegroundPermissionsAsync();
-  if (res.status === 'granted') return 'granted';
-  return res.canAskAgain ? 'denied' : 'blocked';
+  if (kind === 'location') {
+    return normalize(await Location.requestForegroundPermissionsAsync());
+  }
+  if (kind === 'camera') {
+    return normalize(await ImagePicker.requestCameraPermissionsAsync());
+  }
+  // gallery
+  return normalize(await ImagePicker.requestMediaLibraryPermissionsAsync());
 }
 
 export async function openSystemSettings(): Promise<void> {

@@ -99,8 +99,15 @@ export default function Home() {
     });
     bridge.registerHandler('permissions.request', async (payload) => {
       const kind = (payload as { kind?: unknown } | undefined)?.kind;
-      if (kind !== 'notifications' && kind !== 'location') {
-        throw new Error('kind debe ser "notifications" o "location"');
+      if (
+        kind !== 'notifications' &&
+        kind !== 'location' &&
+        kind !== 'camera' &&
+        kind !== 'gallery'
+      ) {
+        throw new Error(
+          'kind debe ser "notifications", "location", "camera" o "gallery"',
+        );
       }
       const state = await requestPermission(kind as PermissionKind);
       return { kind, state };
