@@ -104,6 +104,7 @@ Estos están conectados en `seven-arena-app/app/index.tsx`:
 | `permissions.request` | web → nativo | `{ kind: "notifications" \| "location" }` | `{ kind, state }` con el estado resultante | `kind` inválido |
 | `device.open-settings` | web → nativo | _ninguno_ | `{ opened: true }` | _ninguno_ (fire-and-forget en la práctica) |
 | `location.current` | web → nativo | _ninguno_ | `{ lat, lng, accuracy, ts }` | `PERMISSION_DENIED` o `PERMISSION_BLOCKED` si no hay permiso; falla del GPS |
+| `push.token` | web → nativo | _ninguno_ | `{ token, platform: "ios" \| "android" }` con el Expo push token | `NO_TOKEN` si no hay permiso, no hay projectId EAS, o el dispositivo no soporta push (simulador) |
 
 Agregá nuevos handlers acá a medida que extendamos el bridge para tracking,
 push, cámara, etc. Documentá siempre el nuevo tipo en esta tabla cuando lo
@@ -113,12 +114,17 @@ registres.
 
 ## 5. Eventos espontáneos (nativo → web)
 
-Aún no existen, pero el canal ya está listo. Ejemplos planeados:
+Conectados hoy:
+
+| `type` | Dirección | Payload | Disparo |
+|--------|-----------|---------|---------|
+| `push.tap` | nativo → web | data libre del notification, típicamente `{ url, kind, id, ... }` | El usuario toca una notificación push (foreground o cold-start). El web hace `router.push(url)` si `url` empieza con `/`. |
+
+Planeados:
 
 | `type` | Dirección | Payload | Disparo |
 |--------|-----------|---------|---------|
 | `network.status` | nativo → web | `{ online: boolean }` | Cambio de estado del NetInfo en el contenedor RN |
-| `push.token` | nativo → web | `{ token: string, platform: "ios" \| "android" }` | Después de que Expo notifications registre el dispositivo |
 | `app.foreground` / `app.background` | nativo → web | `{}` | Transiciones del `AppState` |
 | `tracking.position` | nativo → web | `{ lat, lng, speed?, heading?, ts }` | Updates de ubicación en background mientras hay un viaje activo |
 

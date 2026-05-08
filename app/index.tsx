@@ -24,6 +24,7 @@ import {
   requestPermission,
   type PermissionKind,
 } from '../lib/permissions';
+import { getExpoPushToken } from '../lib/push';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -108,6 +109,15 @@ export default function Home() {
       await openSystemSettings();
       return { opened: true };
     });
+    bridge.registerHandler('push.token', async () => {
+      const info = await getExpoPushToken();
+      if (!info) {
+        const err = new Error('No hay token de push disponible');
+        (err as Error & { code?: string }).code = 'NO_TOKEN';
+        throw err;
+      }
+      return info;
+    });
     bridge.registerHandler('location.current', async () => {
       const perm = await Location.getForegroundPermissionsAsync();
       if (perm.status !== 'granted') {
@@ -167,6 +177,37 @@ export default function Home() {
     }, 8000);
     return () => clearTimeout(timer);
   }, [hideNativeSplash]);
+
+  // Forward notification taps to the web side. Covers two cases:
+  //  1) tap while the app is open / backgrounded → addNotificationResponseReceivedListener
+  //  2) tap from a fully-killed app → getLastNotificationResponseAsync on boot
+  // The web side subscribes via bridge.on("push.tap", ...) and decides routing.
+  useEffect(() => {
+    const emitTap = (data: Record<string, unknown> | undefined) => {
+      if (!bridgeRef.current) return;
+      bridgeRef.current.emit('push.tap', data ?? {});
+    };
+
+    const sub = Notifications.addNotificationResponseReceivedListener((response) => {
+      const data = response.notification.request.content.data as
+        | Record<string, unknown>
+        | undefined;
+      emitTap(data);
+    });
+
+    Notifications.getLastNotificationResponseAsync()
+      .then((response) => {
+        if (!response) return;
+        const data = response.notification.request.content.data as
+          | Record<string, unknown>
+          | undefined;
+        // Defer until the WebView mounts so the bridge can deliver.
+        setTimeout(() => emitTap(data), 1500);
+      })
+      .catch(() => {});
+
+    return () => sub.remove();
+  }, []);
 
   const handleMessage = useCallback(async (event: WebViewMessageEvent) => {
     const raw = event.nativeEvent?.data;

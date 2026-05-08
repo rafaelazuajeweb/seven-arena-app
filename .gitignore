@@ -34,6 +34,12 @@ yarn-error.*
 .env
 .env*.local
 
+# Firebase Admin SDK / service account credentials — secret, never commit.
+# google-services.json is safe to commit (no private keys), but the Admin SDK
+# private-key JSON is what authorizes server-side access to the Firebase project.
+*firebase-adminsdk*.json
+*service-account*.json
+
 # typescript
 *.tsbuildinfo
 

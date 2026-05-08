@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "568021604760",
+    "project_id": "seven-arena",
+    "storage_bucket": "seven-arena.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:568021604760:android:16ea08ed71ff58804f73ed",
+        "android_client_info": {
+          "package_name": "com.sevenarena.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBRpQ0n-ZmMpItkNmFFRMLSeJ4U9trSMgg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

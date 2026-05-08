@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Seven Arena",
-    "slug": "seven-arena-app",
+    "slug": "seven-arena",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -17,6 +17,7 @@
     },
     "android": {
       "package": "com.sevenarena.app",
+      "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "backgroundColor": "#0e1822",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -55,6 +56,11 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "1acd666c-75f1-47a6-9153-95590d230804"
+      }
     }
   }
 }
