@@ -30,7 +30,10 @@ import {
 } from '../lib/permissions';
 import { getExpoPushToken } from '../lib/push';
 import {
+  isTrackingRunning,
+  pushCurrentPositionNow,
   resumeTrackingIfEnabled,
+  setDriverSession,
   startTracking,
   stopTracking,
 } from '../lib/tracking';
@@ -118,6 +121,38 @@ export default function Home() {
       await AsyncStorage.removeItem(SESSION_STORAGE_KEY);
       await stopTracking().catch(() => undefined);
       return { ok: true };
+    });
+    // Manual GPS-on for the demo: web tells us who the driver is, we persist
+    // the session, request both permission levels, push one fix right away
+    // and start the continuous task.
+    bridge.registerHandler('tracking.start', async (payload) => {
+      const driverId = (payload as { driverId?: unknown } | undefined)?.driverId;
+      if (typeof driverId !== 'string' || !driverId) {
+        throw new Error('driverId requerido');
+      }
+      await setDriverSession(driverId);
+      const fg = await requestPermission('location');
+      if (fg !== 'granted') {
+        return { ok: false, foreground: fg, background: 'undetermined', running: false };
+      }
+      const bg = await requestBackgroundLocation().catch(() => 'denied' as const);
+      const immediate = await pushCurrentPositionNow();
+      const started = await startTracking();
+      return {
+        ok: started,
+        foreground: fg,
+        background: bg,
+        immediate,
+        running: started,
+      };
+    });
+    bridge.registerHandler('tracking.stop', async () => {
+      await stopTracking();
+      return { ok: true, running: false };
+    });
+    bridge.registerHandler('tracking.status', async () => {
+      const running = await isTrackingRunning();
+      return { running };
     });
     bridge.registerHandler('permissions.status', async () => {
       return await getPermissionsStatus();

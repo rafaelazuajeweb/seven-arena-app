@@ -91,6 +91,32 @@ if (!TaskManager.isTaskDefined(LOCATION_TRACKING_TASK)) {
   });
 }
 
+// Writes a driver session to AsyncStorage so the background TaskManager
+// (which can't be passed a driverId directly) can find it on every fix.
+export const setDriverSession = async (driverId: string): Promise<void> => {
+  const payload = { kind: 'driver', driverId };
+  await AsyncStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(payload));
+};
+
+// One-shot: fetch the device's current position and POST it. Used by the
+// manual "Activar GPS" toggle so the admin sees the driver immediately,
+// without waiting for the next TaskManager tick.
+export const pushCurrentPositionNow = async (): Promise<boolean> => {
+  try {
+    const last = await Location.getLastKnownPositionAsync();
+    const loc =
+      last ??
+      (await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+      }));
+    if (!loc) return false;
+    await pushPosition(loc);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 export const isTrackingRunning = async (): Promise<boolean> => {
   try {
     return await Location.hasStartedLocationUpdatesAsync(LOCATION_TRACKING_TASK);
