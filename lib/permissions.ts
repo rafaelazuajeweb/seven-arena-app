@@ -69,6 +69,18 @@ export async function requestPermission(kind: PermissionKind): Promise<Permissio
   return normalize(await ImagePicker.requestMediaLibraryPermissionsAsync());
 }
 
+// Background location is a separate, OS-level upgrade on top of the foreground
+// permission. Caller must ensure foreground is granted first.
+export async function getBackgroundLocationState(): Promise<PermissionState> {
+  return normalize(await Location.getBackgroundPermissionsAsync());
+}
+
+export async function requestBackgroundLocation(): Promise<PermissionState> {
+  const current = await getBackgroundLocationState();
+  if (current === 'granted' || current === 'blocked') return current;
+  return normalize(await Location.requestBackgroundPermissionsAsync());
+}
+
 export async function openSystemSettings(): Promise<void> {
   if (Platform.OS === 'ios') {
     await Linking.openURL('app-settings:');

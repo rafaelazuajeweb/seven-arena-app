@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AppState,
   Platform,
   RefreshControl,
   ScrollView,
@@ -17,14 +18,22 @@ import * as SplashScreen from 'expo-splash-screen';
 import SplashOverlay from '../components/SplashOverlay';
 import NetworkBanner from '../components/NetworkBanner';
 import OnboardingScreen from '../components/OnboardingScreen';
+import LocationGate from '../components/LocationGate';
 import { createNativeBridge, isBridgeEnvelope, type NativeBridge } from '../lib/native-bridge';
 import {
+  getPermissionState,
   getPermissionsStatus,
   openSystemSettings,
+  requestBackgroundLocation,
   requestPermission,
   type PermissionKind,
 } from '../lib/permissions';
 import { getExpoPushToken } from '../lib/push';
+import {
+  resumeTrackingIfEnabled,
+  startTracking,
+  stopTracking,
+} from '../lib/tracking';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -84,6 +93,7 @@ export default function Home() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [splashVisible, setSplashVisible] = useState(true);
   const [onboardingDone, setOnboardingDone] = useState<boolean | null>(null);
+  const [locationGranted, setLocationGranted] = useState<boolean | null>(null);
   const mountedAt = useRef(Date.now());
   const nativeSplashHidden = useRef(false);
   const webViewRef = useRef<WebView | null>(null);
@@ -92,7 +102,22 @@ export default function Home() {
     const bridge = createNativeBridge(webViewRef);
     bridge.registerHandler('auth.session', async (payload) => {
       await AsyncStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(payload));
+      const kind = (payload as { kind?: unknown } | undefined)?.kind;
+      if (kind === 'driver') {
+        // Best-effort: try to upgrade to background permission so tracking
+        // survives minimizing the app. If denied, foreground tracking still
+        // works while the driver has the WebView open.
+        await requestBackgroundLocation().catch(() => undefined);
+        await startTracking().catch(() => undefined);
+      } else {
+        await stopTracking().catch(() => undefined);
+      }
       return { saved: true };
+    });
+    bridge.registerHandler('auth.logout', async () => {
+      await AsyncStorage.removeItem(SESSION_STORAGE_KEY);
+      await stopTracking().catch(() => undefined);
+      return { ok: true };
     });
     bridge.registerHandler('permissions.status', async () => {
       return await getPermissionsStatus();
@@ -265,6 +290,30 @@ export default function Home() {
       .catch(() => setOnboardingDone(true));
   }, []);
 
+  // If the app was killed while a driver session + tracking were active,
+  // pick up where we left off so the GPS trail doesn't break.
+  useEffect(() => {
+    resumeTrackingIfEnabled().catch(() => undefined);
+  }, []);
+
+  // Re-check location permission whenever the app comes to foreground so a
+  // user that revoked GPS in Ajustes gets gated again before reaching the web.
+  useEffect(() => {
+    const check = async () => {
+      try {
+        const state = await getPermissionState('location');
+        setLocationGranted(state === 'granted');
+      } catch {
+        setLocationGranted(false);
+      }
+    };
+    void check();
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') void check();
+    });
+    return () => sub.remove();
+  }, []);
+
   const finishOnboarding = useCallback(() => {
     AsyncStorage.setItem(ONBOARDED_KEY, '1').catch(() => {});
     setOnboardingDone(true);
@@ -302,6 +351,11 @@ export default function Home() {
   if (onboardingDone === false) {
     hideNativeSplash();
     return <OnboardingScreen onDone={finishOnboarding} />;
+  }
+
+  if (locationGranted === false) {
+    hideNativeSplash();
+    return <LocationGate onGranted={() => setLocationGranted(true)} />;
   }
 
   return (
