@@ -2,6 +2,7 @@ import Constants from 'expo-constants';
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform } from 'react-native';
 
 // Background task identifier — must match the string used in
 // Location.startLocationUpdatesAsync() and in TaskManager.defineTask().
@@ -91,6 +92,34 @@ if (!TaskManager.isTaskDefined(LOCATION_TRACKING_TASK)) {
   });
 }
 
+// Hardware-level check: are the OS location services (GPS / Wi-Fi / Cell)
+// actually turned on? This is independent of whether the user granted the
+// app permission — both have to be true to get a fix.
+export const areGpsServicesEnabled = async (): Promise<boolean> => {
+  try {
+    return await Location.hasServicesEnabledAsync();
+  } catch {
+    return false;
+  }
+};
+
+// Prompt the user to enable location services without leaving the app.
+// Android: shows the system "Use location?" dialog (Google Play services).
+// iOS: no equivalent — must go to Settings, so we just report current state.
+export const ensureGpsServicesEnabled = async (): Promise<boolean> => {
+  if (await areGpsServicesEnabled()) return true;
+  if (Platform.OS === 'android') {
+    try {
+      await Location.enableNetworkProviderAsync();
+    } catch {
+      // User cancelled the dialog or the device has no Google Play services.
+      return false;
+    }
+    return await areGpsServicesEnabled();
+  }
+  return false;
+};
+
 // Writes a driver session to AsyncStorage so the background TaskManager
 // (which can't be passed a driverId directly) can find it on every fix.
 export const setDriverSession = async (driverId: string): Promise<void> => {
@@ -102,6 +131,7 @@ export const setDriverSession = async (driverId: string): Promise<void> => {
 // manual "Activar GPS" toggle so the admin sees the driver immediately,
 // without waiting for the next TaskManager tick.
 export const pushCurrentPositionNow = async (): Promise<boolean> => {
+  if (!(await areGpsServicesEnabled())) return false;
   try {
     const last = await Location.getLastKnownPositionAsync();
     const loc =
@@ -134,6 +164,9 @@ export const startTracking = async (): Promise<boolean> => {
   // Foreground is the prerequisite; background is best-effort.
   const fg = await Location.getForegroundPermissionsAsync();
   if (fg.status !== 'granted') return false;
+  // No point arming the task if the device's GPS is physically off — we'd
+  // just sit idle without any fixes and the UI would lie about being "live".
+  if (!(await areGpsServicesEnabled())) return false;
 
   try {
     await Location.startLocationUpdatesAsync(LOCATION_TRACKING_TASK, {

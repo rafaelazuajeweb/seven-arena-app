@@ -30,6 +30,8 @@ import {
 } from '../lib/permissions';
 import { getExpoPushToken } from '../lib/push';
 import {
+  areGpsServicesEnabled,
+  ensureGpsServicesEnabled,
   isTrackingRunning,
   pushCurrentPositionNow,
   resumeTrackingIfEnabled,
@@ -133,7 +135,26 @@ export default function Home() {
       await setDriverSession(driverId);
       const fg = await requestPermission('location');
       if (fg !== 'granted') {
-        return { ok: false, foreground: fg, background: 'undetermined', running: false };
+        return {
+          ok: false,
+          foreground: fg,
+          background: 'undetermined',
+          gpsServices: await areGpsServicesEnabled(),
+          running: false,
+        };
+      }
+      // Ask the system to turn on location services if they're off — this
+      // shows the in-app prompt on Android so the driver doesn't have to
+      // dig into Ajustes.
+      const gpsServices = await ensureGpsServicesEnabled();
+      if (!gpsServices) {
+        return {
+          ok: false,
+          foreground: fg,
+          background: 'undetermined',
+          gpsServices: false,
+          running: false,
+        };
       }
       const bg = await requestBackgroundLocation().catch(() => 'denied' as const);
       const immediate = await pushCurrentPositionNow();
@@ -142,6 +163,7 @@ export default function Home() {
         ok: started,
         foreground: fg,
         background: bg,
+        gpsServices: true,
         immediate,
         running: started,
       };
@@ -152,7 +174,8 @@ export default function Home() {
     });
     bridge.registerHandler('tracking.status', async () => {
       const running = await isTrackingRunning();
-      return { running };
+      const gpsServices = await areGpsServicesEnabled();
+      return { running, gpsServices };
     });
     bridge.registerHandler('permissions.status', async () => {
       return await getPermissionsStatus();
@@ -329,6 +352,39 @@ export default function Home() {
   // pick up where we left off so the GPS trail doesn't break.
   useEffect(() => {
     resumeTrackingIfEnabled().catch(() => undefined);
+  }, []);
+
+  // Watch GPS hardware on/off while the app is in foreground and notify the
+  // web side so the toggle UI reflects reality (driver disabled GPS from the
+  // notification shade, etc).
+  useEffect(() => {
+    let lastSnapshot: { running: boolean; gpsServices: boolean } | null = null;
+    const tick = async () => {
+      try {
+        const running = await isTrackingRunning();
+        const gpsServices = await areGpsServicesEnabled();
+        const next = { running, gpsServices };
+        if (
+          !lastSnapshot ||
+          lastSnapshot.running !== next.running ||
+          lastSnapshot.gpsServices !== next.gpsServices
+        ) {
+          lastSnapshot = next;
+          bridgeRef.current?.emit('tracking.statusChanged', next);
+        }
+      } catch {
+        // Best-effort — next tick will retry.
+      }
+    };
+    void tick();
+    const interval = setInterval(() => void tick(), 5000);
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') void tick();
+    });
+    return () => {
+      clearInterval(interval);
+      sub.remove();
+    };
   }, []);
 
   // Re-check location permission whenever the app comes to foreground so a
