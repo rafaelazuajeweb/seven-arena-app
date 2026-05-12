@@ -43,13 +43,46 @@ const getStoredDriverId = async (): Promise<string | null> => {
   }
 };
 
-// Posts a single location to the backend. Best-effort: errors are swallowed
-// so a transient network failure doesn't tear down the long-running task.
-const pushPosition = async (location: Location.LocationObject) => {
+// Tracks the result of the most recent fetch so the UI can show what's
+// happening — silent failures on cellular are otherwise invisible.
+export type PushState = {
+  lastAttemptAt: number | null;
+  lastSuccessAt: number | null;
+  lastStatus: number | null;
+  lastError: string | null;
+};
+let lastPushState: PushState = {
+  lastAttemptAt: null,
+  lastSuccessAt: null,
+  lastStatus: null,
+  lastError: null,
+};
+export const getLastPushState = (): PushState => ({ ...lastPushState });
+
+// Posts a single location to the backend. Errors are captured into
+// lastPushState so the toggle can surface them (carrier timeouts, DNS
+// failures, 4xx responses) instead of pretending everything is fine.
+const pushPosition = async (location: Location.LocationObject): Promise<boolean> => {
   const apiUrl = getApiUrl();
-  if (!apiUrl) return;
+  if (!apiUrl) {
+    lastPushState = {
+      ...lastPushState,
+      lastAttemptAt: Date.now(),
+      lastError: 'EXPO_PUBLIC_API_URL no configurada',
+      lastStatus: null,
+    };
+    return false;
+  }
   const driverId = await getStoredDriverId();
-  if (!driverId) return;
+  if (!driverId) {
+    lastPushState = {
+      ...lastPushState,
+      lastAttemptAt: Date.now(),
+      lastError: 'driverId ausente en la sesión',
+      lastStatus: null,
+    };
+    return false;
+  }
   const body = {
     driverId,
     timestamp: new Date(location.timestamp || Date.now()).toISOString(),
@@ -66,14 +99,45 @@ const pushPosition = async (location: Location.LocationObject) => {
         ? location.coords.heading
         : undefined,
   };
+
+  // Explicit timeout — without it, fetch on a stuck cellular radio can hang
+  // indefinitely and block the next tick.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
+  lastPushState = { ...lastPushState, lastAttemptAt: Date.now() };
   try {
-    await fetch(`${apiUrl}/vehicle-positions`, {
+    const res = await fetch(`${apiUrl}/vehicle-positions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: controller.signal,
     });
-  } catch {
-    // Swallow — next tick will try again.
+    if (!res.ok) {
+      lastPushState = {
+        ...lastPushState,
+        lastStatus: res.status,
+        lastError: `HTTP ${res.status}`,
+      };
+      return false;
+    }
+    lastPushState = {
+      ...lastPushState,
+      lastSuccessAt: Date.now(),
+      lastStatus: res.status,
+      lastError: null,
+    };
+    return true;
+  } catch (err) {
+    const msg =
+      err instanceof Error
+        ? err.name === 'AbortError'
+          ? 'timeout (10s)'
+          : err.message
+        : 'fetch falló';
+    lastPushState = { ...lastPushState, lastError: msg, lastStatus: null };
+    return false;
+  } finally {
+    clearTimeout(timer);
   }
 };
 

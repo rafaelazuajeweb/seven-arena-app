@@ -32,6 +32,7 @@ import { getExpoPushToken } from '../lib/push';
 import {
   areGpsServicesEnabled,
   ensureGpsServicesEnabled,
+  getLastPushState,
   isTrackingRunning,
   pushCurrentPositionNow,
   resumeTrackingIfEnabled,
@@ -175,7 +176,7 @@ export default function Home() {
     bridge.registerHandler('tracking.status', async () => {
       const running = await isTrackingRunning();
       const gpsServices = await areGpsServicesEnabled();
-      return { running, gpsServices };
+      return { running, gpsServices, lastPush: getLastPushState() };
     });
     bridge.registerHandler('permissions.status', async () => {
       return await getPermissionsStatus();
@@ -354,30 +355,37 @@ export default function Home() {
     resumeTrackingIfEnabled().catch(() => undefined);
   }, []);
 
-  // Watch GPS hardware on/off while the app is in foreground and notify the
-  // web side so the toggle UI reflects reality (driver disabled GPS from the
-  // notification shade, etc).
+  // Watch GPS hardware on/off + push results while the app is in foreground
+  // and notify the web side so the toggle UI reflects reality (driver
+  // disabled GPS from the notification shade, network outage, etc).
   useEffect(() => {
-    let lastSnapshot: { running: boolean; gpsServices: boolean } | null = null;
+    let lastEmittedAttemptAt: number | null = null;
+    let lastEmitted: { running: boolean; gpsServices: boolean } | null = null;
     const tick = async () => {
       try {
         const running = await isTrackingRunning();
         const gpsServices = await areGpsServicesEnabled();
-        const next = { running, gpsServices };
-        if (
-          !lastSnapshot ||
-          lastSnapshot.running !== next.running ||
-          lastSnapshot.gpsServices !== next.gpsServices
-        ) {
-          lastSnapshot = next;
-          bridgeRef.current?.emit('tracking.statusChanged', next);
+        const lastPush = getLastPushState();
+        const stateChanged =
+          !lastEmitted ||
+          lastEmitted.running !== running ||
+          lastEmitted.gpsServices !== gpsServices;
+        const pushChanged = lastPush.lastAttemptAt !== lastEmittedAttemptAt;
+        if (stateChanged || pushChanged) {
+          lastEmitted = { running, gpsServices };
+          lastEmittedAttemptAt = lastPush.lastAttemptAt;
+          bridgeRef.current?.emit('tracking.statusChanged', {
+            running,
+            gpsServices,
+            lastPush,
+          });
         }
       } catch {
         // Best-effort — next tick will retry.
       }
     };
     void tick();
-    const interval = setInterval(() => void tick(), 5000);
+    const interval = setInterval(() => void tick(), 3000);
     const sub = AppState.addEventListener('change', (next) => {
       if (next === 'active') void tick();
     });
