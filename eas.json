@@ -9,7 +9,11 @@
       "distribution": "internal"
     },
     "preview": {
-      "distribution": "internal"
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_WEB_URL": "https://sa.boazmag.live",
+        "EXPO_PUBLIC_API_URL": "https://sa-api.boazmag.live"
+      }
     },
     "production": {}
   },
