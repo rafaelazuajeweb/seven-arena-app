@@ -2,6 +2,7 @@ import Constants from 'expo-constants';
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import NetInfo from '@react-native-community/netinfo';
 import { Platform } from 'react-native';
 
 // Background task identifier — must match the string used in
@@ -50,18 +51,85 @@ export type PushState = {
   lastSuccessAt: number | null;
   lastStatus: number | null;
   lastError: string | null;
+  queueSize: number;
 };
 let lastPushState: PushState = {
   lastAttemptAt: null,
   lastSuccessAt: null,
   lastStatus: null,
   lastError: null,
+  queueSize: 0,
 };
 export const getLastPushState = (): PushState => ({ ...lastPushState });
+
+// In-memory backlog of fixes whose POST failed (network down, timeout, 5xx).
+// Bounded so a long offline period doesn't grow unbounded. Drained on every
+// successful push and whenever the OS reports network is back.
+type PushBody = {
+  driverId: string;
+  timestamp: string;
+  location: { type: 'Point'; coordinates: [number, number] };
+  speed?: number;
+  heading?: number;
+};
+const QUEUE_LIMIT = 60;
+let pendingQueue: PushBody[] = [];
+const enqueue = (body: PushBody) => {
+  pendingQueue.push(body);
+  if (pendingQueue.length > QUEUE_LIMIT) {
+    pendingQueue.splice(0, pendingQueue.length - QUEUE_LIMIT);
+  }
+  lastPushState = { ...lastPushState, queueSize: pendingQueue.length };
+};
+
+// Low-level POST. Returns true on 2xx, false on any error/non-2xx. Does not
+// touch the queue — that's the caller's job so we can reuse this for both
+// live fixes and queue drains.
+const postBody = async (apiUrl: string, body: PushBody): Promise<{ ok: boolean; status: number | null; error: string | null }> => {
+  // Explicit timeout — without it, fetch on a stuck cellular radio can hang
+  // indefinitely and block the next tick.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const res = await fetch(`${apiUrl}/vehicle-positions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    if (!res.ok) return { ok: false, status: res.status, error: `HTTP ${res.status}` };
+    return { ok: true, status: res.status, error: null };
+  } catch (err) {
+    const msg =
+      err instanceof Error
+        ? err.name === 'AbortError'
+          ? 'timeout (10s)'
+          : err.message
+        : 'fetch falló';
+    return { ok: false, status: null, error: msg };
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+// Flush queued fixes oldest-first. Stops at the first failure so we don't
+// keep blasting a broken network. Called after a live push succeeds and
+// when NetInfo reports the device just got connectivity back.
+const drainQueue = async (apiUrl: string) => {
+  while (pendingQueue.length > 0) {
+    const next = pendingQueue[0];
+    const res = await postBody(apiUrl, next);
+    if (!res.ok) break;
+    pendingQueue.shift();
+  }
+  lastPushState = { ...lastPushState, queueSize: pendingQueue.length };
+};
 
 // Posts a single location to the backend. Errors are captured into
 // lastPushState so the toggle can surface them (carrier timeouts, DNS
 // failures, 4xx responses) instead of pretending everything is fine.
+// Failed fixes are queued and retried automatically when the network
+// recovers — the trail isn't broken by a brief disconnection.
 const pushPosition = async (location: Location.LocationObject): Promise<boolean> => {
   const apiUrl = getApiUrl();
   if (!apiUrl) {
@@ -83,7 +151,7 @@ const pushPosition = async (location: Location.LocationObject): Promise<boolean>
     };
     return false;
   }
-  const body = {
+  const body: PushBody = {
     driverId,
     timestamp: new Date(location.timestamp || Date.now()).toISOString(),
     location: {
@@ -100,46 +168,51 @@ const pushPosition = async (location: Location.LocationObject): Promise<boolean>
         : undefined,
   };
 
-  // Explicit timeout — without it, fetch on a stuck cellular radio can hang
-  // indefinitely and block the next tick.
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 10_000);
   lastPushState = { ...lastPushState, lastAttemptAt: Date.now() };
-  try {
-    const res = await fetch(`${apiUrl}/vehicle-positions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    if (!res.ok) {
-      lastPushState = {
-        ...lastPushState,
-        lastStatus: res.status,
-        lastError: `HTTP ${res.status}`,
-      };
-      return false;
-    }
+  const res = await postBody(apiUrl, body);
+  if (!res.ok) {
+    // Network/transient failure: queue this fix so the trail can be
+    // backfilled when we get connectivity again.
+    enqueue(body);
     lastPushState = {
       ...lastPushState,
-      lastSuccessAt: Date.now(),
       lastStatus: res.status,
-      lastError: null,
+      lastError: res.error,
+      queueSize: pendingQueue.length,
     };
-    return true;
-  } catch (err) {
-    const msg =
-      err instanceof Error
-        ? err.name === 'AbortError'
-          ? 'timeout (10s)'
-          : err.message
-        : 'fetch falló';
-    lastPushState = { ...lastPushState, lastError: msg, lastStatus: null };
     return false;
-  } finally {
-    clearTimeout(timer);
   }
+  lastPushState = {
+    ...lastPushState,
+    lastSuccessAt: Date.now(),
+    lastStatus: res.status,
+    lastError: null,
+  };
+  // Opportunistically drain any backlog while the network is healthy.
+  if (pendingQueue.length > 0) {
+    await drainQueue(apiUrl);
+  }
+  return true;
 };
+
+// Subscribed once at module load. When the OS flips from offline → online
+// (or wifi → cell), force a drain so queued fixes ship immediately rather
+// than waiting for the next 3s tick.
+let netinfoSubscribed = false;
+let wasOffline = false;
+const ensureNetInfoSubscription = () => {
+  if (netinfoSubscribed) return;
+  netinfoSubscribed = true;
+  NetInfo.addEventListener((state) => {
+    const offline = !state.isConnected || state.isInternetReachable === false;
+    if (wasOffline && !offline) {
+      const apiUrl = getApiUrl();
+      if (apiUrl) void drainQueue(apiUrl);
+    }
+    wasOffline = offline;
+  });
+};
+ensureNetInfoSubscription();
 
 // Defining the task at module load is required by TaskManager: it has to be
 // registered before app launch completes so the OS can revive it.
