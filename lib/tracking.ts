@@ -52,6 +52,11 @@ export type PushState = {
   lastStatus: number | null;
   lastError: string | null;
   queueSize: number;
+  // Consecutive failures so far. The UI only surfaces "fallo la conexión"
+  // after several misses in a row — Venezuelan cellular drops single
+  // requests routinely while the device is otherwise online, and a
+  // one-shot blip shouldn't scare the driver.
+  consecutiveFailures: number;
 };
 let lastPushState: PushState = {
   lastAttemptAt: null,
@@ -59,8 +64,18 @@ let lastPushState: PushState = {
   lastStatus: null,
   lastError: null,
   queueSize: 0,
+  consecutiveFailures: 0,
 };
 export const getLastPushState = (): PushState => ({ ...lastPushState });
+
+// How long a single POST is allowed before we abort. Field test on
+// Venezuelan cellular showed legitimate requests sometimes taking 12-18s,
+// so 10s was cutting off otherwise-valid pushes. 25s gives enough slack
+// without making the toggle feel hung when the network is truly down.
+const FETCH_TIMEOUT_MS = 25_000;
+// Inline retry attempts for a single live fix before we queue it. Quick
+// retry catches transient packet loss without waiting for the next 3s tick.
+const PUSH_RETRIES = 2;
 
 // In-memory backlog of fixes whose POST failed (network down, timeout, 5xx).
 // Bounded so a long offline period doesn't grow unbounded. Drained on every
@@ -89,7 +104,7 @@ const postBody = async (apiUrl: string, body: PushBody): Promise<{ ok: boolean; 
   // Explicit timeout — without it, fetch on a stuck cellular radio can hang
   // indefinitely and block the next tick.
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 10_000);
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
     const res = await fetch(`${apiUrl}/vehicle-positions`, {
       method: 'POST',
@@ -103,13 +118,26 @@ const postBody = async (apiUrl: string, body: PushBody): Promise<{ ok: boolean; 
     const msg =
       err instanceof Error
         ? err.name === 'AbortError'
-          ? 'timeout (10s)'
+          ? `timeout (${Math.round(FETCH_TIMEOUT_MS / 1000)}s)`
           : err.message
         : 'fetch falló';
     return { ok: false, status: null, error: msg };
   } finally {
     clearTimeout(timer);
   }
+};
+
+// Wraps postBody with a tiny inline retry. Quick second attempt catches
+// transient packet loss without waiting for the next 3s GPS tick — which
+// matters because we want the marker to flip back to green ASAP.
+const postWithRetry = async (apiUrl: string, body: PushBody) => {
+  let result = await postBody(apiUrl, body);
+  for (let i = 0; i < PUSH_RETRIES && !result.ok; i++) {
+    // Short backoff: 600ms then 1.5s. Total worst case: 25s + 0.6s + 25s + 1.5s + 25s ≈ 77s.
+    await new Promise((r) => setTimeout(r, i === 0 ? 600 : 1500));
+    result = await postBody(apiUrl, body);
+  }
+  return result;
 };
 
 // Flush queued fixes oldest-first. Stops at the first failure so we don't
@@ -169,7 +197,7 @@ const pushPosition = async (location: Location.LocationObject): Promise<boolean>
   };
 
   lastPushState = { ...lastPushState, lastAttemptAt: Date.now() };
-  const res = await postBody(apiUrl, body);
+  const res = await postWithRetry(apiUrl, body);
   if (!res.ok) {
     // Network/transient failure: queue this fix so the trail can be
     // backfilled when we get connectivity again.
@@ -177,8 +205,12 @@ const pushPosition = async (location: Location.LocationObject): Promise<boolean>
     lastPushState = {
       ...lastPushState,
       lastStatus: res.status,
-      lastError: res.error,
+      // Only surface the error to the UI after 3 consecutive misses.
+      // A single drop on cellular is normal; users shouldn't see "fallo
+      // la conexión" until something is actually wrong.
+      lastError: lastPushState.consecutiveFailures + 1 >= 3 ? res.error : null,
       queueSize: pendingQueue.length,
+      consecutiveFailures: lastPushState.consecutiveFailures + 1,
     };
     return false;
   }
@@ -187,6 +219,7 @@ const pushPosition = async (location: Location.LocationObject): Promise<boolean>
     lastSuccessAt: Date.now(),
     lastStatus: res.status,
     lastError: null,
+    consecutiveFailures: 0,
   };
   // Opportunistically drain any backlog while the network is healthy.
   if (pendingQueue.length > 0) {
@@ -197,14 +230,17 @@ const pushPosition = async (location: Location.LocationObject): Promise<boolean>
 
 // Subscribed once at module load. When the OS flips from offline → online
 // (or wifi → cell), force a drain so queued fixes ship immediately rather
-// than waiting for the next 3s tick.
+// than waiting for the next 3s tick. We only trust the `isConnected` bit —
+// on Android, `isInternetReachable` is unreliable (often stuck on `null`
+// or wrongly reports `false` while requests succeed), and we got bitten
+// by that in the Venezuela field test.
 let netinfoSubscribed = false;
 let wasOffline = false;
 const ensureNetInfoSubscription = () => {
   if (netinfoSubscribed) return;
   netinfoSubscribed = true;
   NetInfo.addEventListener((state) => {
-    const offline = !state.isConnected || state.isInternetReachable === false;
+    const offline = state.isConnected === false;
     if (wasOffline && !offline) {
       const apiUrl = getApiUrl();
       if (apiUrl) void drainQueue(apiUrl);
@@ -213,6 +249,24 @@ const ensureNetInfoSubscription = () => {
   });
 };
 ensureNetInfoSubscription();
+
+// Periodic drain heartbeat. NetInfo can miss transitions on slow cellular
+// (no "offline→online" event fires when reception was just flapping),
+// so we also try to drain the queue every 12s regardless. Cheap: if the
+// queue is empty, it returns immediately; if the network is still down,
+// the first POST fails fast and we stop.
+let drainHeartbeatStarted = false;
+const ensureDrainHeartbeat = () => {
+  if (drainHeartbeatStarted) return;
+  drainHeartbeatStarted = true;
+  setInterval(() => {
+    if (pendingQueue.length === 0) return;
+    const apiUrl = getApiUrl();
+    if (!apiUrl) return;
+    void drainQueue(apiUrl);
+  }, 12_000);
+};
+ensureDrainHeartbeat();
 
 // Defining the task at module load is required by TaskManager: it has to be
 // registered before app launch completes so the OS can revive it.
