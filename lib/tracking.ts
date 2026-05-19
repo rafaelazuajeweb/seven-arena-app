@@ -11,6 +11,10 @@ export const LOCATION_TRACKING_TASK = 'seven-location-tracking';
 
 const SESSION_STORAGE_KEY = 'seven.session';
 const TRACKING_ENABLED_KEY = 'seven.tracking.enabled';
+// Persisted backlog of fixes that haven't been POSTed yet. Survives app kill,
+// OS-reap, and force-close — the in-memory queue alone is lost in those cases
+// and the trail ends up with a straight line jumping over the offline gap.
+const QUEUE_STORAGE_KEY = 'seven.tracking.queue.v1';
 
 // 3-second cadence as requested by the client.
 const UPDATE_INTERVAL_MS = 3000;
@@ -87,15 +91,55 @@ type PushBody = {
   speed?: number;
   heading?: number;
 };
-const QUEUE_LIMIT = 60;
+// ~30 minutes of offline coverage at the 3s cadence. Raised from 60 after
+// the Venezuela field test: a 3-minute window was too short for the kind
+// of dead zones we saw (tunnels, cellular gaps in valleys).
+const QUEUE_LIMIT = 600;
 let pendingQueue: PushBody[] = [];
+
+// Writes the current queue to AsyncStorage. Fire-and-forget — failures here
+// (quota, disk full) shouldn't block the live push path. We accept a small
+// risk of losing the last fix if the OS kills us between enqueue and the
+// persist completing; the alternative (awaiting on every push) would slow
+// down the 3s tick.
+const persistQueue = async () => {
+  try {
+    await AsyncStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(pendingQueue));
+  } catch {
+    // ignore — best-effort
+  }
+};
+
 const enqueue = (body: PushBody) => {
   pendingQueue.push(body);
   if (pendingQueue.length > QUEUE_LIMIT) {
     pendingQueue.splice(0, pendingQueue.length - QUEUE_LIMIT);
   }
   lastPushState = { ...lastPushState, queueSize: pendingQueue.length };
+  void persistQueue();
 };
+
+// Read the persisted queue at module load. If there's anything there it
+// means a previous run of the app got killed while offline — fire an
+// immediate drain so the backlog ships as soon as we're alive again.
+let queueHydrated = false;
+const hydrateQueue = async () => {
+  if (queueHydrated) return;
+  queueHydrated = true;
+  try {
+    const raw = await AsyncStorage.getItem(QUEUE_STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as PushBody[];
+    if (!Array.isArray(parsed) || parsed.length === 0) return;
+    pendingQueue = parsed.slice(-QUEUE_LIMIT);
+    lastPushState = { ...lastPushState, queueSize: pendingQueue.length };
+    const apiUrl = getApiUrl();
+    if (apiUrl) void drainQueue(apiUrl);
+  } catch {
+    // ignore — corrupted JSON, treat as empty
+  }
+};
+void hydrateQueue();
 
 // Low-level POST. Returns true on 2xx, false on any error/non-2xx. Does not
 // touch the queue — that's the caller's job so we can reuse this for both
@@ -149,6 +193,10 @@ const drainQueue = async (apiUrl: string) => {
     const res = await postBody(apiUrl, next);
     if (!res.ok) break;
     pendingQueue.shift();
+    // Persist after each successful pop, not just at the end — if the app
+    // dies mid-drain we'd otherwise re-send fixes that already made it to
+    // the server, duplicating points in the trail.
+    void persistQueue();
   }
   lastPushState = { ...lastPushState, queueSize: pendingQueue.length };
 };
