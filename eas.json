@@ -15,9 +15,20 @@
         "EXPO_PUBLIC_API_URL": "https://sa-api.boazmag.live"
       }
     },
-    "production": {}
+    "production": {
+      "env": {
+        "EXPO_PUBLIC_WEB_URL": "https://sevenarena.app",
+        "EXPO_PUBLIC_API_URL": "https://proyect-seven-production.up.railway.app"
+      }
+    }
   },
   "submit": {
-    "production": {}
+    "production": {
+      "ios": {
+        "appleId": "contacto@sevenarena.app",
+        "ascAppId": "6783156193",
+        "appleTeamId": "JTZ2V4S648"
+      }
+    }
   }
 }

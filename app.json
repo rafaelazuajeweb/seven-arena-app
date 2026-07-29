@@ -2,7 +2,7 @@
   "expo": {
     "name": "Seven Arena",
     "slug": "seven-arena",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "sevenarenaapp",
@@ -10,7 +10,9 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.sevenarena.app",
+      "usesNonExemptEncryption": false,
+      "buildNumber": "2",
+      "bundleIdentifier": "app.sevenarena.mobile",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Seven Arena usa tu ubicación para mostrarte rutas y traslados cercanos.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "Seven Arena necesita tu ubicación en segundo plano para registrar los traslados que realizás.",
@@ -18,18 +20,30 @@
         "NSCameraUsageDescription": "Seven Arena usa la cámara para tomar fotos de credenciales y documentos.",
         "NSPhotoLibraryUsageDescription": "Seven Arena accede a tu galería para subir fotos y documentos.",
         "NSPhotoLibraryAddUsageDescription": "Seven Arena guarda comprobantes en tu galería cuando lo solicitas.",
-        "UIBackgroundModes": ["location", "fetch"]
+        "UIBackgroundModes": [
+          "location",
+          "fetch",
+          "location",
+          "fetch"
+        ],
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
       "package": "com.sevenarena.app",
       "googleServicesFile": "./google-services.json",
       "permissions": [
-        "ACCESS_FINE_LOCATION",
-        "ACCESS_COARSE_LOCATION",
-        "ACCESS_BACKGROUND_LOCATION",
-        "FOREGROUND_SERVICE",
-        "FOREGROUND_SERVICE_LOCATION"
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION",
+        "android.permission.RECORD_AUDIO"
       ],
       "adaptiveIcon": {
         "backgroundColor": "#0e1822",
