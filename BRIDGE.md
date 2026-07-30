@@ -105,6 +105,7 @@ Estos están conectados en `seven-arena-app/app/index.tsx`:
 | `device.open-settings` | web → nativo | _ninguno_ | `{ opened: true }` | _ninguno_ (fire-and-forget en la práctica) |
 | `location.current` | web → nativo | _ninguno_ | `{ lat, lng, accuracy, ts }` | `PERMISSION_DENIED` o `PERMISSION_BLOCKED` si no hay permiso; falla del GPS |
 | `push.token` | web → nativo | _ninguno_ | `{ token, platform: "ios" \| "android" }` con el Expo push token | `NO_TOKEN` si no hay permiso, no hay projectId EAS, o el dispositivo no soporta push (simulador) |
+| `url.open` | web → nativo | `{ url }` — esquemas permitidos: `tel:`, `sms:`, `mailto:`, `https:`, `whatsapp:` | `{ opened: true }` | `url requerida` (falta/incorrecta) o `esquema de URL no permitido` (fuera del whitelist) |
 
 Agregá nuevos handlers acá a medida que extendamos el bridge para tracking,
 push, cámara, etc. Documentá siempre el nuevo tipo en esta tabla cuando lo

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AppState,
+  Linking,
   Platform,
   RefreshControl,
   ScrollView,
@@ -198,6 +199,23 @@ export default function Home() {
     });
     bridge.registerHandler('device.open-settings', async () => {
       await openSystemSettings();
+      return { opened: true };
+    });
+    // Abre una URL en el sistema (marcador de teléfono, SMS, correo, enlaces
+    // externos). El WebView no maneja tel:/sms:/mailto: por sí mismo, así que
+    // el lado web (p.ej. EmergencyNumbersSection y los botones de llamada)
+    // envía `url.open` y aquí lo derivamos al SO con Linking. Se restringe a
+    // esquemas seguros para no abrir deep links arbitrarios si el frontend
+    // llegara a verse comprometido.
+    bridge.registerHandler('url.open', async (payload) => {
+      const url = (payload as { url?: unknown } | undefined)?.url;
+      if (typeof url !== 'string' || !url) {
+        throw new Error('url requerida');
+      }
+      if (!/^(tel:|sms:|mailto:|https:|whatsapp:)/i.test(url)) {
+        throw new Error('esquema de URL no permitido');
+      }
+      await Linking.openURL(url);
       return { opened: true };
     });
     bridge.registerHandler('push.token', async () => {
