@@ -20,14 +20,17 @@ import SplashOverlay from '../components/SplashOverlay';
 import NetworkBanner from '../components/NetworkBanner';
 import OnboardingScreen from '../components/OnboardingScreen';
 import LocationGate from '../components/LocationGate';
+import BackgroundLocationDisclosure from '../components/BackgroundLocationDisclosure';
 import { createNativeBridge, isBridgeEnvelope, type NativeBridge } from '../lib/native-bridge';
 import {
+  getBackgroundLocationState,
   getPermissionState,
   getPermissionsStatus,
   openSystemSettings,
   requestBackgroundLocation,
   requestPermission,
   type PermissionKind,
+  type PermissionState,
 } from '../lib/permissions';
 import { getExpoPushToken } from '../lib/push';
 import {
@@ -105,16 +108,102 @@ export default function Home() {
   const nativeSplashHidden = useRef(false);
   const webViewRef = useRef<WebView | null>(null);
   const bridgeRef = useRef<NativeBridge | null>(null);
+
+  // Google Play exige un aviso propio de la app antes del diálogo del sistema
+  // que pide ubicación en segundo plano. Los handlers del bridge son funciones
+  // async que corren fuera del árbol de React, así que no pueden "renderizar y
+  // esperar": guardamos el `resolve` de una promesa en un ref y el modal lo
+  // invoca cuando el usuario responde. Los useCallback van con deps [] a
+  // propósito — los handlers se registran una sola vez y capturan estas
+  // referencias para siempre.
+  const [bgDisclosureVisible, setBgDisclosureVisible] = useState(false);
+  const [bgDisclosureStep, setBgDisclosureStep] = useState<'disclosure' | 'settings'>('disclosure');
+  const bgDisclosureResolver = useRef<((accepted: boolean) => void) | null>(null);
+
+  const askBackgroundDisclosure = useCallback(
+    (step: 'disclosure' | 'settings') =>
+      new Promise<boolean>((resolve) => {
+        // Si ya había un aviso en curso (p.ej. auth.session y tracking.start
+        // llegan solapados), lo cancelamos en vez de pisar su resolver: una
+        // promesa huérfana dejaría al handler del bridge esperando para
+        // siempre y la web nunca recibiría respuesta.
+        bgDisclosureResolver.current?.(false);
+        bgDisclosureResolver.current = resolve;
+        setBgDisclosureStep(step);
+        setBgDisclosureVisible(true);
+      }),
+    [],
+  );
+
+  const resolveBgDisclosure = useCallback((accepted: boolean) => {
+    setBgDisclosureVisible(false);
+    const resolve = bgDisclosureResolver.current;
+    bgDisclosureResolver.current = null;
+    resolve?.(accepted);
+  }, []);
+
+  useEffect(
+    () => () => {
+      bgDisclosureResolver.current?.(false);
+      bgDisclosureResolver.current = null;
+    },
+    [],
+  );
+
+  const requestBackgroundWithDisclosure = useCallback(async (): Promise<PermissionState> => {
+    const current = await getBackgroundLocationState();
+    if (current === 'granted') return 'granted';
+
+    const accepted = await askBackgroundDisclosure('disclosure');
+    if (!accepted) return 'denied';
+
+    const result = await requestBackgroundLocation();
+    if (result === 'granted') return result;
+
+    // Android 11+ (API 30) no concede ACCESS_BACKGROUND_LOCATION desde un
+    // diálogo: el sistema obliga a elegir "Permitir todo el tiempo" a mano en
+    // los ajustes de la app. Sin este segundo paso el permiso no se otorga
+    // nunca, que es justo lo que pasaba antes — en silencio, por el
+    // `.catch(() => undefined)` que había aquí.
+    if (Platform.OS === 'android' && Number(Platform.Version) >= 30) {
+      const goToSettings = await askBackgroundDisclosure('settings');
+      if (goToSettings) await openSystemSettings().catch(() => undefined);
+      return getBackgroundLocationState();
+    }
+    return result;
+  }, [askBackgroundDisclosure]);
+
+  // ─── PUNTO DE DECISIÓN PENDIENTE ──────────────────────────────────────────
+  // Qué hacer cuando el conductor NO concede ubicación en segundo plano.
+  // Hoy esto replica el comportamiento anterior: el turno arranca igual y el
+  // tracking queda solo en primer plano (se corta al minimizar la app), sin
+  // que nadie se entere. Es la opción permisiva.
+  //
+  // Alternativas y su costo:
+  //  - Bloquear el turno hasta que conceda: la central nunca pierde el rastro,
+  //    pero un conductor sin el permiso no puede trabajar.
+  //  - Notificar a la central que ese turno va sin cobertura en segundo plano:
+  //    hace falta un endpoint nuevo y decidir qué hace la central con el aviso.
+  //  - Avisar solo al conductor y dejarlo seguir: barato, pero la central
+  //    sigue a ciegas.
+  const handleBackgroundPermissionOutcome = useCallback(async (state: PermissionState) => {
+    if (state === 'granted') return;
+    // TODO(rafael): política de degradación. Ver la nota de arriba.
+  }, []);
+
   if (bridgeRef.current === null) {
     const bridge = createNativeBridge(webViewRef);
     bridge.registerHandler('auth.session', async (payload) => {
       await AsyncStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(payload));
       const kind = (payload as { kind?: unknown } | undefined)?.kind;
       if (kind === 'driver') {
-        // Best-effort: try to upgrade to background permission so tracking
-        // survives minimizing the app. If denied, foreground tracking still
-        // works while the driver has the WebView open.
-        await requestBackgroundLocation().catch(() => undefined);
+        // Pide el permiso de segundo plano precedido del aviso que exige
+        // Play. Si el conductor lo rechaza, el tracking en primer plano sigue
+        // funcionando mientras tenga el WebView abierto.
+        const bgState = await requestBackgroundWithDisclosure().catch(
+          () => 'denied' as PermissionState,
+        );
+        await handleBackgroundPermissionOutcome(bgState);
         await startTracking().catch(() => undefined);
       } else {
         await stopTracking().catch(() => undefined);
@@ -158,7 +247,10 @@ export default function Home() {
           running: false,
         };
       }
-      const bg = await requestBackgroundLocation().catch(() => 'denied' as const);
+      const bg = await requestBackgroundWithDisclosure().catch(
+        () => 'denied' as PermissionState,
+      );
+      await handleBackgroundPermissionOutcome(bg);
       const immediate = await pushCurrentPositionNow();
       const started = await startTracking();
       return {
@@ -501,6 +593,13 @@ export default function Home() {
         <SplashOverlay visible={splashVisible} />
         <NetworkBanner />
       </View>
+      <BackgroundLocationDisclosure
+        visible={bgDisclosureVisible}
+        step={bgDisclosureStep}
+        onAccept={() => resolveBgDisclosure(true)}
+        onDecline={() => resolveBgDisclosure(false)}
+        onOpenSettings={() => resolveBgDisclosure(true)}
+      />
     </SafeAreaView>
   );
 }
