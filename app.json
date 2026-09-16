@@ -11,7 +11,7 @@
     "ios": {
       "supportsTablet": true,
       "usesNonExemptEncryption": false,
-      "buildNumber": "6",
+      "buildNumber": "7",
       "bundleIdentifier": "app.sevenarena.mobile",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Seven Arena usa tu ubicación para mostrarte rutas y traslados cercanos.",

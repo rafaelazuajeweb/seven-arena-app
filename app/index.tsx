@@ -116,16 +116,17 @@ export default function Home() {
   const [bgDisclosureVisible, setBgDisclosureVisible] = useState(false);
   const [bgDisclosureStep, setBgDisclosureStep] = useState<'disclosure' | 'settings'>('disclosure');
   const bgDisclosureResolver = useRef<((accepted: boolean) => void) | null>(null);
+  const bgDisclosureAnswer = useRef<boolean | null>(null);
+  const bgPermissionRequest = useRef<Promise<PermissionState> | null>(null);
 
   const askBackgroundDisclosure = useCallback(
     (step: 'disclosure' | 'settings') =>
       new Promise<boolean>((resolve) => {
-        // Si ya había un aviso en curso (p.ej. auth.session y tracking.start
-        // llegan solapados), lo cancelamos en vez de pisar su resolver: una
-        // promesa huérfana dejaría al handler del bridge esperando para
-        // siempre y la web nunca recibiría respuesta.
+        // Defensive cleanup: never leave a bridge response orphaned.
+        // Concurrent callers normally share bgPermissionRequest below.
         bgDisclosureResolver.current?.(false);
         bgDisclosureResolver.current = resolve;
+        bgDisclosureAnswer.current = null;
         setBgDisclosureStep(step);
         setBgDisclosureVisible(true);
       }),
@@ -133,11 +134,21 @@ export default function Home() {
   );
 
   const resolveBgDisclosure = useCallback((accepted: boolean) => {
+    if (!bgDisclosureResolver.current || bgDisclosureAnswer.current !== null) return;
+    bgDisclosureAnswer.current = accepted;
     setBgDisclosureVisible(false);
-    const resolve = bgDisclosureResolver.current;
-    bgDisclosureResolver.current = null;
-    resolve?.(accepted);
   }, []);
+
+  // Continue only after React commits removal of the in-screen notice. Never
+  // present a system permission while a native Modal is still dismissing.
+  useEffect(() => {
+    if (bgDisclosureVisible || bgDisclosureAnswer.current === null) return;
+    const resolve = bgDisclosureResolver.current;
+    const answer = bgDisclosureAnswer.current;
+    bgDisclosureResolver.current = null;
+    bgDisclosureAnswer.current = null;
+    resolve?.(answer);
+  }, [bgDisclosureVisible]);
 
   useEffect(
     () => () => {
@@ -147,27 +158,32 @@ export default function Home() {
     [],
   );
 
-  const requestBackgroundWithDisclosure = useCallback(async (): Promise<PermissionState> => {
-    const current = await getBackgroundLocationState();
-    if (current === 'granted') return 'granted';
+  const requestBackgroundWithDisclosure = useCallback((): Promise<PermissionState> => {
+    // Retries from the portal share the same decision and system request.
+    if (bgPermissionRequest.current) return bgPermissionRequest.current;
+    const request = async (): Promise<PermissionState> => {
+      const current = await getBackgroundLocationState();
+      if (current === 'granted') return 'granted';
 
-    const accepted = await askBackgroundDisclosure('disclosure');
-    if (!accepted) return 'denied';
+      const accepted = await askBackgroundDisclosure('disclosure');
+      if (!accepted) return 'denied';
 
-    const result = await requestBackgroundLocation();
-    if (result === 'granted') return result;
+      const result = await requestBackgroundLocation();
+      if (result === 'granted') return result;
 
-    // Android 11+ (API 30) no concede ACCESS_BACKGROUND_LOCATION desde un
-    // diálogo: el sistema obliga a elegir "Permitir todo el tiempo" a mano en
-    // los ajustes de la app. Sin este segundo paso el permiso no se otorga
-    // nunca, que es justo lo que pasaba antes — en silencio, por el
-    // `.catch(() => undefined)` que había aquí.
-    if (Platform.OS === 'android' && Number(Platform.Version) >= 30) {
-      const goToSettings = await askBackgroundDisclosure('settings');
-      if (goToSettings) await openSystemSettings().catch(() => undefined);
-      return getBackgroundLocationState();
-    }
-    return result;
+      // iOS can deny the upgrade silently after "Allow Once"; Android 11+
+      // also needs Settings. Explain the platform-specific choice in both.
+      if (Platform.OS === 'ios' || (Platform.OS === 'android' && Number(Platform.Version) >= 30)) {
+        const goToSettings = await askBackgroundDisclosure('settings');
+        if (goToSettings) await openSystemSettings().catch(() => undefined);
+        return getBackgroundLocationState();
+      }
+      return result;
+    };
+    bgPermissionRequest.current = request().finally(() => {
+      bgPermissionRequest.current = null;
+    });
+    return bgPermissionRequest.current;
   }, [askBackgroundDisclosure]);
 
   // ─── PUNTO DE DECISIÓN PENDIENTE ──────────────────────────────────────────
@@ -193,16 +209,9 @@ export default function Home() {
     bridge.registerHandler('auth.session', async (payload) => {
       await AsyncStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(payload));
       const kind = (payload as { kind?: unknown } | undefined)?.kind;
-      if (kind === 'driver') {
-        // Pide el permiso de segundo plano precedido del aviso que exige
-        // Play. Si el conductor lo rechaza, el tracking en primer plano sigue
-        // funcionando mientras tenga el WebView abierto.
-        const bgState = await requestBackgroundWithDisclosure().catch(
-          () => 'denied' as PermissionState,
-        );
-        await handleBackgroundPermissionOutcome(bgState);
-        await startTracking().catch(() => undefined);
-      } else {
+      // Login only persists the session. The driver portal sends tracking.start
+      // after navigation; asking here too races that request and the keyboard.
+      if (kind !== 'driver') {
         await stopTracking().catch(() => undefined);
       }
       return { saved: true };
@@ -215,7 +224,7 @@ export default function Home() {
     // Manual GPS-on for the demo: web tells us who the driver is, we persist
     // the session, request both permission levels, push one fix right away
     // and start the continuous task.
-    bridge.registerHandler('tracking.start', async (payload) => {
+    const startDriverTracking = async (payload: unknown) => {
       const driverId = (payload as { driverId?: unknown } | undefined)?.driverId;
       if (typeof driverId !== 'string' || !driverId) {
         throw new Error('driverId requerido');
@@ -271,6 +280,16 @@ export default function Home() {
         gpsServices: true,
         running: started,
       };
+    };
+    const trackingStarts = new Map<string, ReturnType<typeof startDriverTracking>>();
+    bridge.registerHandler('tracking.start', (payload) => {
+      const driverId = (payload as { driverId?: unknown } | undefined)?.driverId;
+      if (typeof driverId !== 'string' || !driverId) throw new Error('driverId requerido');
+      const pending = trackingStarts.get(driverId);
+      if (pending) return pending;
+      const request = startDriverTracking(payload).finally(() => trackingStarts.delete(driverId));
+      trackingStarts.set(driverId, request);
+      return request;
     });
     bridge.registerHandler('tracking.stop', async () => {
       await stopTracking();
@@ -590,7 +609,11 @@ export default function Home() {
   // sus traslados no necesita conceder nada. No reintroducir la barrera.
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.webContainer}>
+      <View
+        style={styles.webContainer}
+        accessibilityElementsHidden={bgDisclosureVisible}
+        importantForAccessibility={bgDisclosureVisible ? 'no-hide-descendants' : 'auto'}
+      >
         <WebView
           key={refreshKey}
           ref={webViewRef}

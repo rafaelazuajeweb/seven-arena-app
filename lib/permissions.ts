@@ -59,7 +59,17 @@ export async function getPermissionsStatus(): Promise<PermissionsStatus> {
   return { notifications, location, locationBackground, camera, gallery };
 }
 
-export async function requestPermission(kind: PermissionKind): Promise<PermissionState> {
+const pendingRequests = new Map<PermissionKind, Promise<PermissionState>>();
+
+export function requestPermission(kind: PermissionKind): Promise<PermissionState> {
+  const pending = pendingRequests.get(kind);
+  if (pending) return pending;
+  const request = requestPermissionOnce(kind).finally(() => pendingRequests.delete(kind));
+  pendingRequests.set(kind, request);
+  return request;
+}
+
+async function requestPermissionOnce(kind: PermissionKind): Promise<PermissionState> {
   const current = await getPermissionState(kind);
   if (current === 'granted' || current === 'blocked') return current;
 

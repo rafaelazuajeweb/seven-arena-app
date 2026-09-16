@@ -1,4 +1,5 @@
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useEffect } from 'react';
+import { BackHandler, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 // Google Play exige un aviso propio de la app ("prominent disclosure") ANTES de
 // mostrar el diálogo del sistema que pide ACCESS_BACKGROUND_LOCATION. El aviso
@@ -39,14 +40,25 @@ export default function BackgroundLocationDisclosure({
 }: Props) {
   const isSettings = step === 'settings';
 
+  useEffect(() => {
+    if (!visible) return;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      onDecline();
+      return true;
+    });
+    return () => subscription.remove();
+  }, [visible, onDecline]);
+
+  // This notice belongs to the screen, not a second native view controller.
+  // A native Modal can leave a transparent touch-blocking layer on iOS when
+  // its dismissal overlaps the location prompt or login navigation.
+  if (!visible) return null;
+
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="fade"
-      // En Android el botón atrás equivale a rechazar: el aviso nunca puede
-      // descartarse "sin querer" hacia una concesión de permiso.
-      onRequestClose={onDecline}
+    <View
+      style={styles.overlay}
+      accessibilityViewIsModal
+      onAccessibilityEscape={onDecline}
     >
       <View style={styles.backdrop}>
         <View style={styles.card}>
@@ -59,13 +71,16 @@ export default function BackgroundLocationDisclosure({
               <>
                 <Text style={styles.title}>Falta un paso en Ajustes</Text>
                 <Text style={styles.body}>
-                  Android no permite conceder este permiso desde la app. Abre los
-                  ajustes de Seven Arena, entra en Permisos → Ubicación y elige
-                  <Text style={styles.strong}> Permitir todo el tiempo</Text>.
+                  {Platform.OS === 'ios'
+                    ? 'Abre los ajustes de Seven Arena, entra en Ubicación y elige'
+                    : 'Abre los ajustes de Seven Arena, entra en Permisos → Ubicación y elige'}
+                  <Text style={styles.strong}>
+                    {Platform.OS === 'ios' ? ' Siempre' : ' Permitir todo el tiempo'}
+                  </Text>.
                 </Text>
                 <Text style={styles.hint}>
-                  Si eliges &quot;Permitir solo mientras se usa la app&quot;, tu
-                  recorrido dejará de registrarse cuando cierres la app.
+                  Puedes volver a la app y continuar usándola aunque no concedas
+                  este permiso.
                 </Text>
               </>
             ) : (
@@ -76,7 +91,7 @@ export default function BackgroundLocationDisclosure({
                   activo,
                   <Text style={styles.strong}>
                     {' '}
-                    incluso cuando la app está en segundo plano o cerrada
+                    incluso cuando minimizas la app o bloqueas la pantalla
                   </Text>
                   .
                 </Text>
@@ -110,11 +125,12 @@ export default function BackgroundLocationDisclosure({
           </View>
         </View>
       </View>
-    </Modal>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  overlay: { ...StyleSheet.absoluteFillObject, zIndex: 20 },
   backdrop: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.72)',
