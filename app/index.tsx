@@ -248,14 +248,27 @@ export default function Home() {
         () => 'denied' as PermissionState,
       );
       await handleBackgroundPermissionOutcome(bg);
-      const immediate = await pushCurrentPositionNow();
       const started = await startTracking();
+      // Dispara-y-olvida A PROPOSITO. pushCurrentPositionNow termina en
+      // postWithRetry, que reintenta hasta 3 veces con 25 s de timeout cada una
+      // (77 s en el peor caso, calculado en el comentario de tracking.ts) y
+      // ademas puede quedarse vaciando la cola. La web corta el request a los
+      // 30 s: await-earlo era lo que dejaba este handler sin responder y, al
+      // colgarse, trababa los toques de toda la pantalla. El punto sale igual y
+      // su resultado llega por el evento tracking.statusChanged.
+      void pushCurrentPositionNow();
       return {
         ok: started,
         foreground: fg,
         background: bg,
+        // Sin "Permitir siempre" Android arma el servicio y muestra su
+        // notificacion, pero deja de entregar posiciones apenas la app deja de
+        // verse: el rastreo PARECE activo y no manda nada al minimizar. La web
+        // necesita este dato para avisarle al conductor y mandarlo a Ajustes,
+        // porque en Android 11+ el permiso no se puede conceder desde un
+        // dialogo dentro de la app.
+        backgroundOk: bg === 'granted',
         gpsServices: true,
-        immediate,
         running: started,
       };
     });
@@ -266,7 +279,19 @@ export default function Home() {
     bridge.registerHandler('tracking.status', async () => {
       const running = await isTrackingRunning();
       const gpsServices = await areGpsServicesEnabled();
-      return { running, gpsServices, lastPush: getLastPushState() };
+      // "running" solo dice que el servicio esta armado. Sin permiso de segundo
+      // plano ese servicio no entrega nada al minimizar, asi que informarlo
+      // solo seria mentir a medias.
+      const background = await getBackgroundLocationState().catch(
+        () => 'undetermined' as PermissionState,
+      );
+      return {
+        running,
+        gpsServices,
+        background,
+        backgroundOk: background === 'granted',
+        lastPush: getLastPushState(),
+      };
     });
     bridge.registerHandler('permissions.status', async () => {
       return await getPermissionsStatus();
@@ -467,23 +492,37 @@ export default function Home() {
   // disabled GPS from the notification shade, network outage, etc).
   useEffect(() => {
     let lastEmittedAttemptAt: number | null = null;
-    let lastEmitted: { running: boolean; gpsServices: boolean } | null = null;
+    let lastEmitted: {
+      running: boolean;
+      gpsServices: boolean;
+      background: PermissionState;
+    } | null = null;
     const tick = async () => {
       try {
         const running = await isTrackingRunning();
         const gpsServices = await areGpsServicesEnabled();
+        // Se vigila junto con lo demas porque el conductor puede bajarlo de
+        // "Permitir siempre" a "Solo con la app abierta" desde Ajustes en
+        // cualquier momento, y desde afuera eso se ve igual que si estuviera
+        // andando: el servicio sigue armado y deja de mandar al minimizar.
+        const background = await getBackgroundLocationState().catch(
+          () => 'undetermined' as PermissionState,
+        );
         const lastPush = getLastPushState();
         const stateChanged =
           !lastEmitted ||
           lastEmitted.running !== running ||
-          lastEmitted.gpsServices !== gpsServices;
+          lastEmitted.gpsServices !== gpsServices ||
+          lastEmitted.background !== background;
         const pushChanged = lastPush.lastAttemptAt !== lastEmittedAttemptAt;
         if (stateChanged || pushChanged) {
-          lastEmitted = { running, gpsServices };
+          lastEmitted = { running, gpsServices, background };
           lastEmittedAttemptAt = lastPush.lastAttemptAt;
           bridgeRef.current?.emit('tracking.statusChanged', {
             running,
             gpsServices,
+            background,
+            backgroundOk: background === 'granted',
             lastPush,
           });
         }
