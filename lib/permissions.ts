@@ -13,6 +13,12 @@ export type PermissionState = 'granted' | 'denied' | 'undetermined' | 'blocked';
 export type PermissionsStatus = {
   notifications: PermissionState;
   location: PermissionState;
+  // "Permitir siempre". Es un permiso aparte del de primer plano y es el que
+  // decide si el rastreo sobrevive a minimizar la app: sin el, Android arma el
+  // servicio igual pero deja de entregar posiciones apenas la app deja de
+  // verse. Se informa por separado porque hasta ahora nadie podia saber si un
+  // conductor lo tenia o no.
+  locationBackground: PermissionState;
   camera: PermissionState;
   gallery: PermissionState;
 };
@@ -43,13 +49,14 @@ export async function getPermissionState(kind: PermissionKind): Promise<Permissi
 }
 
 export async function getPermissionsStatus(): Promise<PermissionsStatus> {
-  const [notifications, location, camera, gallery] = await Promise.all([
+  const [notifications, location, locationBackground, camera, gallery] = await Promise.all([
     getPermissionState('notifications'),
     getPermissionState('location'),
+    getBackgroundLocationState().catch(() => 'undetermined' as PermissionState),
     getPermissionState('camera'),
     getPermissionState('gallery'),
   ]);
-  return { notifications, location, camera, gallery };
+  return { notifications, location, locationBackground, camera, gallery };
 }
 
 export async function requestPermission(kind: PermissionKind): Promise<PermissionState> {
@@ -75,6 +82,13 @@ export async function getBackgroundLocationState(): Promise<PermissionState> {
   return normalize(await Location.getBackgroundPermissionsAsync());
 }
 
+// Ojo con Android 11+ (API 30): el sistema NO permite conceder
+// ACCESS_BACKGROUND_LOCATION desde un dialogo dentro de la app. La llamada
+// vuelve 'denied' o 'blocked' sin mostrar nada util, y la unica via real es
+// que la persona entre a Ajustes y elija "Permitir todo el tiempo". Por eso
+// quien llame a esto tiene que MIRAR el resultado y ofrecer openSystemSettings()
+// cuando no sea 'granted', en vez de seguir de largo: si se ignora, el rastreo
+// arranca, muestra su notificacion y no manda un solo punto al minimizar.
 export async function requestBackgroundLocation(): Promise<PermissionState> {
   const current = await getBackgroundLocationState();
   if (current === 'granted' || current === 'blocked') return current;

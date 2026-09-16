@@ -102,11 +102,29 @@ let pendingQueue: PushBody[] = [];
 // risk of losing the last fix if the OS kills us between enqueue and the
 // persist completing; the alternative (awaiting on every push) would slow
 // down the 3s tick.
-const persistQueue = async () => {
+// Se permite UNA escritura en vuelo a la vez. Con la red caida entraba un punto
+// a la cola cada 3 s y cada uno serializaba hasta 600 objetos y los escribia a
+// AsyncStorage; eso es lo que ahogaba al hilo JS y terminaba trabando los toques
+// de toda la pantalla. Si llegan mas cambios mientras se escribe, se agenda una
+// sola escritura al final en vez de una por cambio.
+let persistInFlight = false;
+let persistDirty = false;
+const persistQueue = async (): Promise<void> => {
+  if (persistInFlight) {
+    persistDirty = true;
+    return;
+  }
+  persistInFlight = true;
   try {
     await AsyncStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(pendingQueue));
   } catch {
     // ignore — best-effort
+  } finally {
+    persistInFlight = false;
+  }
+  if (persistDirty) {
+    persistDirty = false;
+    void persistQueue();
   }
 };
 
@@ -184,11 +202,19 @@ const postWithRetry = async (apiUrl: string, body: PushBody) => {
   return result;
 };
 
+// Cuantos puntos se mandan como maximo por llamada. Sin tope, un conductor que
+// estuvo media hora sin senal vuelve con la cola llena (600) y el drenaje se
+// come varios minutos; si alguien await-ea ese drenaje, se cuelga con el. El
+// latido cada 12 s sigue vaciando el resto sin bloquear a nadie.
+const DRAIN_BATCH = 50;
+
 // Flush queued fixes oldest-first. Stops at the first failure so we don't
 // keep blasting a broken network. Called after a live push succeeds and
 // when NetInfo reports the device just got connectivity back.
 const drainQueue = async (apiUrl: string) => {
-  while (pendingQueue.length > 0) {
+  let sent = 0;
+  while (pendingQueue.length > 0 && sent < DRAIN_BATCH) {
+    sent += 1;
     const next = pendingQueue[0];
     const res = await postBody(apiUrl, next);
     if (!res.ok) break;
@@ -366,18 +392,40 @@ export const setDriverSession = async (driverId: string): Promise<void> => {
   await AsyncStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(payload));
 };
 
+// getCurrentPositionAsync no acepta timeout y un GPS frio bajo techo puede
+// tardar mas de un minuto en dar la primera fijacion. Sin techo, esa espera se
+// cuela en cualquier cosa que la await.
+const FIRST_FIX_TIMEOUT_MS = 8_000;
+
+const getPositionWithTimeout = async (): Promise<Location.LocationObject | null> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High }),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), FIRST_FIX_TIMEOUT_MS);
+      }),
+    ]);
+  } catch {
+    return null;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+};
+
 // One-shot: fetch the device's current position and POST it. Used by the
 // manual "Activar GPS" toggle so the admin sees the driver immediately,
 // without waiting for the next TaskManager tick.
+//
+// Puede tardar: pushPosition reintenta hasta 3 veces con 25 s de timeout cada
+// una. Nadie deberia await-earla dentro de un handler del bridge (la web corta
+// a los 30 s); se llama en modo dispara-y-olvida y el resultado real llega por
+// tracking.statusChanged.
 export const pushCurrentPositionNow = async (): Promise<boolean> => {
   if (!(await areGpsServicesEnabled())) return false;
   try {
     const last = await Location.getLastKnownPositionAsync();
-    const loc =
-      last ??
-      (await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.High,
-      }));
+    const loc = last ?? (await getPositionWithTimeout());
     if (!loc) return false;
     await pushPosition(loc);
     return true;
