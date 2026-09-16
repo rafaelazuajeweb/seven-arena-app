@@ -30,7 +30,7 @@ function load(file, mocks) {
   return exports;
 }
 
-async function harness(t, { foreground = 'granted', background = 'denied', result = 'granted', gps = true } = {}) {
+async function harness(t, { foreground = 'granted', background = 'denied', result = 'granted', settingsResult = result, gps = true } = {}) {
   const handlers = {}, calls = [];
   let renderer, back;
   const overlays = () => renderer.root.findAllByProps({ accessibilityViewIsModal: true });
@@ -68,9 +68,11 @@ async function harness(t, { foreground = 'granted', background = 'denied', resul
         assert.equal(overlays().length, 0, 'System permission opens only after disclosure removal');
         calls.push('background'); background = result; return result;
       },
-      openSystemSettings: async () => {
+      openSystemSettings: async () => {},
+      openSystemSettingsAndWaitForReturn: async () => {
         assert.equal(overlays().length, 0, 'Settings opens only after disclosure removal');
         calls.push('settings');
+        background = settingsResult;
       },
     },
     '../lib/push': {},
@@ -155,6 +157,15 @@ test('Back cancels Settings without opening it and leaves the portal accessible'
   assert.equal(app.overlays().length, 0); assert.equal(app.webAccessible(), true);
 });
 
+test('granting Siempre in Settings is read again on return before tracker starts', async t => {
+  const app = await harness(t, { result: 'denied', settingsResult: 'granted' }); let pending;
+  await act(async () => { pending = app.handlers['tracking.start']({ driverId: 'test' }); });
+  await app.press(0); await app.press(0);
+  assert.equal((await pending).backgroundOk, true);
+  assert.deepEqual(app.calls, ['background', 'settings', 'start', 'push']);
+  assert.equal(app.overlays().length, 0);
+});
+
 for (const options of [{ foreground: 'denied' }, { gps: false }]) {
   test(`portal stays usable without location: ${JSON.stringify(options)}`, async t => {
     const app = await harness(t, options); let response;
@@ -185,4 +196,38 @@ test('foreground permission retries share one system dialog and recover from err
   await nextTurn();
   finish.resolve({ status: 'granted' });
   assert.equal(await next, 'granted'); assert.equal(attempts, 2);
+});
+
+test('opening Settings waits for the real return, not an inactive permission alert', async () => {
+  let onChange, removed = 0, returned = false;
+  const permissions = load('lib/permissions.ts', {
+    'expo-notifications': {}, 'expo-image-picker': {}, 'expo-location': {},
+    'react-native': {
+      Platform: { OS: 'ios' }, Linking: { openURL: async () => {} },
+      AppState: { addEventListener: (_, fn) => {
+        onChange = fn; return { remove() { removed++; } };
+      } },
+    },
+  });
+  const visit = permissions.openSystemSettingsAndWaitForReturn().then(() => { returned = true; });
+  await nextTurn(); assert.equal(returned, false);
+  onChange('inactive'); onChange('active');
+  await nextTurn(); assert.equal(returned, false);
+  onChange('background');
+  await nextTurn(); assert.equal(returned, false);
+  onChange('active'); await visit;
+  assert.equal(returned, true); assert.equal(removed, 1);
+});
+
+test('failure to open Settings rejects and removes its AppState listener', async () => {
+  let removed = 0;
+  const permissions = load('lib/permissions.ts', {
+    'expo-notifications': {}, 'expo-image-picker': {}, 'expo-location': {},
+    'react-native': {
+      Platform: { OS: 'ios' }, Linking: { openURL: async () => { throw Error('unavailable'); } },
+      AppState: { addEventListener: () => ({ remove() { removed++; } }) },
+    },
+  });
+  await assert.rejects(permissions.openSystemSettingsAndWaitForReturn(), /unavailable/);
+  assert.equal(removed, 1);
 });

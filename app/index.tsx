@@ -25,6 +25,7 @@ import {
   getBackgroundLocationState,
   getPermissionsStatus,
   openSystemSettings,
+  openSystemSettingsAndWaitForReturn,
   requestBackgroundLocation,
   requestPermission,
   type PermissionKind,
@@ -175,7 +176,7 @@ export default function Home() {
       // also needs Settings. Explain the platform-specific choice in both.
       if (Platform.OS === 'ios' || (Platform.OS === 'android' && Number(Platform.Version) >= 30)) {
         const goToSettings = await askBackgroundDisclosure('settings');
-        if (goToSettings) await openSystemSettings().catch(() => undefined);
+        if (goToSettings) await openSystemSettingsAndWaitForReturn().catch(() => undefined);
         return getBackgroundLocationState();
       }
       return result;

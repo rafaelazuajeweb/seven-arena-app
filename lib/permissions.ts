@@ -1,7 +1,7 @@
 import * as Notifications from 'expo-notifications';
 import * as Location from 'expo-location';
 import * as ImagePicker from 'expo-image-picker';
-import { Linking, Platform } from 'react-native';
+import { AppState, Linking, Platform } from 'react-native';
 
 export type PermissionKind =
   | 'notifications'
@@ -111,4 +111,24 @@ export async function openSystemSettings(): Promise<void> {
   } else {
     await Linking.openSettings();
   }
+}
+
+// Linking resolves when Settings opens, before the user changes permission.
+// Subscribe first, and wait for an actual background -> active round trip.
+// "inactive" alone can be an iOS permission alert, not a visit to Settings.
+export function openSystemSettingsAndWaitForReturn(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let leftApp = false;
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'background') leftApp = true;
+      if (leftApp && state === 'active') {
+        subscription.remove();
+        resolve();
+      }
+    });
+    openSystemSettings().catch((error) => {
+      subscription.remove();
+      reject(error);
+    });
+  });
 }
