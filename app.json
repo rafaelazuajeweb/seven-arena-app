@@ -2,7 +2,7 @@
   "expo": {
     "name": "Seven Arena",
     "slug": "seven-arena",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "sevenarenaapp",
@@ -11,7 +11,7 @@
     "ios": {
       "supportsTablet": true,
       "usesNonExemptEncryption": false,
-      "buildNumber": "5",
+      "buildNumber": "6",
       "bundleIdentifier": "app.sevenarena.mobile",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Seven Arena usa tu ubicación para mostrarte rutas y traslados cercanos.",
