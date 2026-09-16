@@ -82,19 +82,19 @@ export default function LocationGate({ onGranted }: Props) {
         <View style={styles.iconBubble}>
           <Text style={styles.iconText}>📍</Text>
         </View>
-        <Text style={styles.title}>Activá tu ubicación</Text>
+        <Text style={styles.title}>Activa tu ubicación</Text>
         <Text style={styles.subtitle}>
           Seven Arena necesita acceso al GPS para mostrarte rutas, traslados
           cercanos y coordinar tus viajes.
         </Text>
         {blocked ? (
           <Text style={styles.hint}>
-            El permiso está bloqueado. Abrí Ajustes y habilitalo manualmente
+            El permiso está bloqueado. Abre Ajustes y habilítalo manualmente
             para continuar.
           </Text>
         ) : (
           <Text style={styles.hint}>
-            Sin este permiso no podés continuar. Podés modificarlo cuando
+            Sin este permiso no puedes continuar. Puedes modificarlo cuando
             quieras desde Ajustes.
           </Text>
         )}

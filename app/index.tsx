@@ -19,12 +19,10 @@ import * as SplashScreen from 'expo-splash-screen';
 import SplashOverlay from '../components/SplashOverlay';
 import NetworkBanner from '../components/NetworkBanner';
 import OnboardingScreen from '../components/OnboardingScreen';
-import LocationGate from '../components/LocationGate';
 import BackgroundLocationDisclosure from '../components/BackgroundLocationDisclosure';
 import { createNativeBridge, isBridgeEnvelope, type NativeBridge } from '../lib/native-bridge';
 import {
   getBackgroundLocationState,
-  getPermissionState,
   getPermissionsStatus,
   openSystemSettings,
   requestBackgroundLocation,
@@ -103,7 +101,6 @@ export default function Home() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [splashVisible, setSplashVisible] = useState(true);
   const [onboardingDone, setOnboardingDone] = useState<boolean | null>(null);
-  const [locationGranted, setLocationGranted] = useState<boolean | null>(null);
   const mountedAt = useRef(Date.now());
   const nativeSplashHidden = useRef(false);
   const webViewRef = useRef<WebView | null>(null);
@@ -505,24 +502,6 @@ export default function Home() {
     };
   }, []);
 
-  // Re-check location permission whenever the app comes to foreground so a
-  // user that revoked GPS in Ajustes gets gated again before reaching the web.
-  useEffect(() => {
-    const check = async () => {
-      try {
-        const state = await getPermissionState('location');
-        setLocationGranted(state === 'granted');
-      } catch {
-        setLocationGranted(false);
-      }
-    };
-    void check();
-    const sub = AppState.addEventListener('change', (next) => {
-      if (next === 'active') void check();
-    });
-    return () => sub.remove();
-  }, []);
-
   const finishOnboarding = useCallback(() => {
     AsyncStorage.setItem(ONBOARDED_KEY, '1').catch(() => {});
     setOnboardingDone(true);
@@ -562,11 +541,14 @@ export default function Home() {
     return <OnboardingScreen onDone={finishOnboarding} />;
   }
 
-  if (locationGranted === false) {
-    hideNativeSplash();
-    return <LocationGate onGranted={() => setLocationGranted(true)} />;
-  }
-
+  // Aquí había una barrera que impedía entrar sin permiso de ubicación.
+  // Apple rechazó la 1.0.1 (4) por Guideline 5.1.5: la app debe ser
+  // plenamente funcional con los Servicios de Ubicación desactivados.
+  //
+  // La ubicación es exclusiva del rol Conductor y se solicita en su propio
+  // flujo, al pulsar "Activar GPS y enviar ubicación" en el portal, con su
+  // aviso previo. Un participante que consulta su credencial, su horario o
+  // sus traslados no necesita conceder nada. No reintroducir la barrera.
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.webContainer}>

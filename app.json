@@ -11,12 +11,12 @@
     "ios": {
       "supportsTablet": true,
       "usesNonExemptEncryption": false,
-      "buildNumber": "3",
+      "buildNumber": "5",
       "bundleIdentifier": "app.sevenarena.mobile",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Seven Arena usa tu ubicación para mostrarte rutas y traslados cercanos.",
-        "NSLocationAlwaysAndWhenInUseUsageDescription": "Seven Arena necesita tu ubicación en segundo plano para registrar los traslados que realizás.",
-        "NSLocationAlwaysUsageDescription": "Seven Arena necesita tu ubicación en segundo plano para registrar los traslados que realizás.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Seven Arena necesita tu ubicación en segundo plano para registrar los traslados que realizas.",
+        "NSLocationAlwaysUsageDescription": "Seven Arena necesita tu ubicación en segundo plano para registrar los traslados que realizas.",
         "NSCameraUsageDescription": "Seven Arena usa la cámara para tomar fotos de credenciales y documentos.",
         "NSPhotoLibraryUsageDescription": "Seven Arena accede a tu galería para subir fotos y documentos.",
         "NSPhotoLibraryAddUsageDescription": "Seven Arena guarda comprobantes en tu galería cuando lo solicitas.",
@@ -28,7 +28,7 @@
       }
     },
     "android": {
-      "package": "com.sevenarena.app",
+      "package": "app.sevenarena.mobile",
       "versionCode": 1,
       "googleServicesFile": "./google-services.json",
       "permissions": [
@@ -57,8 +57,8 @@
         "expo-location",
         {
           "locationWhenInUsePermission": "Seven Arena usa tu ubicación para mostrarte rutas y traslados cercanos.",
-          "locationAlwaysAndWhenInUsePermission": "Seven Arena necesita tu ubicación en segundo plano para registrar los traslados que realizás.",
-          "locationAlwaysPermission": "Seven Arena necesita tu ubicación en segundo plano para registrar los traslados que realizás.",
+          "locationAlwaysAndWhenInUsePermission": "Seven Arena necesita tu ubicación en segundo plano para registrar los traslados que realizas.",
+          "locationAlwaysPermission": "Seven Arena necesita tu ubicación en segundo plano para registrar los traslados que realizas.",
           "isAndroidBackgroundLocationEnabled": true,
           "isAndroidForegroundServiceEnabled": true
         }

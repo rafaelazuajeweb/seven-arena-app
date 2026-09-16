@@ -20,6 +20,13 @@
         "EXPO_PUBLIC_WEB_URL": "https://sevenarena.app",
         "EXPO_PUBLIC_API_URL": "https://proyect-seven-production.up.railway.app"
       }
+    },
+    "production-apk": {
+      "extends": "production",
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      }
     }
   },
   "submit": {

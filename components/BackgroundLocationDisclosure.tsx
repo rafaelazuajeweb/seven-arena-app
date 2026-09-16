@@ -26,7 +26,7 @@ const BG = '#0e1822';
 const BULLETS = [
   'La central usa tu ubicación para asignarte traslados y coordinar los viajes en curso.',
   'Se guarda el histórico de tu recorrido durante el turno.',
-  'Solo la central de Seven Arena puede verlo. Los pasajeros no acceden a tu ubicación.',
+  'La ve la central de Seven Arena y, mientras el viaje está en curso, el pasajero que trasladas.',
   'El registro se detiene cuando cierras tu turno o cierras sesión en la app.',
 ];
 

@@ -74,7 +74,7 @@ export default function OnboardingScreen({ onDone }: Props) {
         />
         <Text style={styles.title}>Bienvenido a Seven Arena</Text>
         <Text style={styles.subtitle}>
-          Para una experiencia completa, activá los siguientes permisos. Podés
+          Para una experiencia completa, activa los siguientes permisos. Puedes
           cambiarlos cuando quieras desde tu perfil.
         </Text>
 
