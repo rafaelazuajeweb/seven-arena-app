@@ -30,12 +30,12 @@ function load(file, mocks) {
   return exports;
 }
 
-async function harness(t, { foreground = 'granted', background = 'denied', result = 'granted', settingsResult = result, gps = true } = {}) {
+async function harness(t, { foreground = 'granted', background = 'denied', result = 'granted', settingsResult = result, gps = true, os = 'ios', version = '26.3' } = {}) {
   const handlers = {}, calls = [];
   let renderer, back;
   const overlays = () => renderer.root.findAllByProps({ accessibilityViewIsModal: true });
   const rn = {
-    Platform: { OS: 'ios', Version: '26.3' },
+    Platform: { OS: os, Version: version },
     StyleSheet: { create: value => value, absoluteFillObject: { position: 'absolute' } },
     AppState: { addEventListener: () => ({ remove() {} }) }, Linking: {},
     BackHandler: { addEventListener: (_, fn) => { back = fn; return { remove: () => { back = null; } }; } },
@@ -54,6 +54,7 @@ async function harness(t, { foreground = 'granted', background = 'denied', resul
     'expo-constants': { expoConfig: { extra: { webUrl: 'https://example.test' } } },
     'expo-location': {},
     'expo-notifications': { setNotificationHandler() {},
+      AndroidImportance: { MAX: 5 }, setNotificationChannelAsync: async () => {},
       addNotificationResponseReceivedListener: () => ({ remove() {} }),
       getLastNotificationResponseAsync: async () => null },
     'expo-splash-screen': { preventAutoHideAsync: async () => {}, hideAsync: async () => {} },
@@ -174,6 +175,34 @@ for (const options of [{ foreground: 'denied' }, { gps: false }]) {
     assert.equal(app.overlays().length, 0); assert.equal(app.webAccessible(), true);
   });
 }
+
+for (const version of [30, 36]) {
+  test(`Android API ${version}: returning with Always permission starts tracking once`, async t => {
+    const app = await harness(t, { os: 'android', version, result: 'denied', settingsResult: 'granted' });
+    let first, retry;
+    await act(async () => {
+      first = app.handlers['tracking.start']({ driverId: 'test' });
+      retry = app.handlers['tracking.start']({ driverId: 'test' });
+    });
+    assert.equal(first, retry);
+    await app.press(0);
+    assert.match(app.text(), /Permitir todo el tiempo/);
+    assert.deepEqual(app.calls, ['background']);
+    await app.press(0);
+    assert.equal((await first).backgroundOk, true);
+    assert.deepEqual(app.calls, ['background', 'settings', 'start', 'push']);
+    assert.equal(app.overlays().length, 0); assert.equal(app.webAccessible(), true);
+  });
+}
+
+test('Android hardware Back cancels disclosure without requesting background access', async t => {
+  const app = await harness(t, { os: 'android', version: 36 }); let pending;
+  await act(async () => { pending = app.handlers['tracking.start']({ driverId: 'test' }); });
+  await app.back();
+  assert.equal((await pending).backgroundOk, false);
+  assert.deepEqual(app.calls, ['start', 'push']);
+  assert.equal(app.overlays().length, 0); assert.equal(app.webAccessible(), true);
+});
 
 test('foreground permission retries share one system dialog and recover from errors', async () => {
   let attempts = 0, finish;
