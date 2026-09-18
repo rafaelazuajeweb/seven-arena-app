@@ -465,6 +465,13 @@ export const startTracking = async (): Promise<boolean> => {
         notificationTitle: 'Seven Arena · tracking activo',
         notificationBody: 'Registrando ubicación para tus traslados.',
         notificationColor: '#21D0B3',
+        // Regla del producto: minimizar = sigue transmitiendo; cerrar (deslizar
+        // la app fuera de recientes) = se detiene. Sin esto el servicio queda
+        // en su default (false): sobrevive al cierre, Android lo relanza solo
+        // (START_REDELIVER_INTENT) y expo-task-manager vuelve a cargar el JS en
+        // segundo plano — en algunos telefonos eso se ve como que la app "se
+        // abre sola". Al reabrirla, resumeTrackingIfEnabled lo rearma.
+        killServiceOnDestroy: true,
       },
       pausesUpdatesAutomatically: false,
       showsBackgroundLocationIndicator: true,
