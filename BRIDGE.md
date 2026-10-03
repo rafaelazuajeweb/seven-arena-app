@@ -105,6 +105,10 @@ Estos están conectados en `seven-arena-app/app/index.tsx`:
 | `device.open-settings` | web → nativo | _ninguno_ | `{ opened: true }` | _ninguno_ (fire-and-forget en la práctica) |
 | `location.current` | web → nativo | _ninguno_ | `{ lat, lng, accuracy, ts }` | `PERMISSION_DENIED` o `PERMISSION_BLOCKED` si no hay permiso; falla del GPS |
 | `push.token` | web → nativo | _ninguno_ | `{ token, platform: "ios" \| "android" }` con el Expo push token | `NO_TOKEN` si no hay permiso, no hay projectId EAS, o el dispositivo no soporta push (simulador) |
+| `tracking.start` | web → nativo | `{ driverId, sessionId? }` — `sessionId` es la sesión única del portal; con ella el shell firma cada fijo GPS (`x-portal-*`) | `{ ok, running, foreground, background, backgroundOk, gpsServices, batteryOptimized }` | `driverId requerido` |
+| `tracking.session` | web → nativo | `{ driverId, sessionId }` — la web volvió a reclamar la sesión (otro teléfono se la había tomado) | `{ saved: true }` | `driverId requerido` |
+| `tracking.status` | web → nativo | _ninguno_ | `{ running, gpsServices, background, backgroundOk, batteryOptimized, lastPush }` — `batteryOptimized` sólo tiene valor en Android (1.0.3+) | _ninguno_ |
+| `device.battery-optimization` | web → nativo | _ninguno_ | `{ opened }` — abre el diálogo del sistema para dejar la app sin restricciones de batería (Android) | _ninguno_ |
 | `url.open` | web → nativo | `{ url }` — esquemas permitidos: `tel:`, `sms:`, `mailto:`, `https:`, `whatsapp:` | `{ opened: true }` | `url requerida` (falta/incorrecta) o `esquema de URL no permitido` (fuera del whitelist) |
 
 Agregá nuevos handlers acá a medida que extendamos el bridge para tracking,

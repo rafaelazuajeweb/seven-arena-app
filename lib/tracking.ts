@@ -1,4 +1,6 @@
 import Constants from 'expo-constants';
+import * as Battery from 'expo-battery';
+import * as IntentLauncher from 'expo-intent-launcher';
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -26,7 +28,15 @@ type StoredSession = {
   driverId?: string;
   athleteId?: string;
   user?: Record<string, unknown>;
+  // Sesion unica del portal (x-portal-session). La web la entrega en
+  // tracking.start / tracking.session; con ella el servidor sabe que el fijo
+  // viene del telefono que tiene la sesion y no de otro que entro con el
+  // mismo codigo (02-10-2026: un iPhone en Concon mandaba "el bus" de un
+  // conductor que iba por Santiago).
+  sessionId?: string;
 };
+
+type StoredDriver = { driverId: string; sessionId: string | null };
 
 const getApiUrl = (): string | null => {
   const fromEnv = process.env.EXPO_PUBLIC_API_URL?.trim();
@@ -36,17 +46,41 @@ const getApiUrl = (): string | null => {
   return null;
 };
 
-const getStoredDriverId = async (): Promise<string | null> => {
+const getStoredDriver = async (): Promise<StoredDriver | null> => {
   try {
     const raw = await AsyncStorage.getItem(SESSION_STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as StoredSession;
-    if (parsed.kind === 'driver' && parsed.driverId) return parsed.driverId;
+    if (parsed.kind === 'driver' && parsed.driverId) {
+      return {
+        driverId: parsed.driverId,
+        sessionId: typeof parsed.sessionId === 'string' && parsed.sessionId ? parsed.sessionId : null,
+      };
+    }
     return null;
   } catch {
     return null;
   }
 };
+
+const getStoredDriverId = async (): Promise<string | null> =>
+  (await getStoredDriver())?.driverId ?? null;
+
+// Cabeceras de sesion de portal para la ingesta. Sin sessionId se manda como
+// hasta ahora (el servidor sigue en modo transicional y lo acepta).
+const portalHeaders = (driver: StoredDriver | null): Record<string, string> =>
+  driver?.sessionId
+    ? {
+        'x-portal-kind': 'driver',
+        'x-portal-user': driver.driverId,
+        'x-portal-session': driver.sessionId,
+      }
+    : {};
+
+// 401/403 = la sesion de este telefono ya no vale (otro entro con el codigo)
+// o el conductor no es este. Reintentar o encolar no sirve: el servidor va a
+// decir lo mismo hasta que la web entregue una sesion nueva.
+const esRechazoDeSesion = (status: number | null) => status === 401 || status === 403;
 
 // Tracks the result of the most recent fetch so the UI can show what's
 // happening — silent failures on cellular are otherwise invisible.
@@ -162,7 +196,11 @@ void hydrateQueue();
 // Low-level POST. Returns true on 2xx, false on any error/non-2xx. Does not
 // touch the queue — that's the caller's job so we can reuse this for both
 // live fixes and queue drains.
-const postBody = async (apiUrl: string, body: PushBody): Promise<{ ok: boolean; status: number | null; error: string | null }> => {
+const postBody = async (
+  apiUrl: string,
+  body: PushBody,
+  headers: Record<string, string> = {},
+): Promise<{ ok: boolean; status: number | null; error: string | null }> => {
   // Explicit timeout — without it, fetch on a stuck cellular radio can hang
   // indefinitely and block the next tick.
   const controller = new AbortController();
@@ -170,7 +208,7 @@ const postBody = async (apiUrl: string, body: PushBody): Promise<{ ok: boolean; 
   try {
     const res = await fetch(`${apiUrl}/vehicle-positions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...headers },
       body: JSON.stringify(body),
       signal: controller.signal,
     });
@@ -192,12 +230,12 @@ const postBody = async (apiUrl: string, body: PushBody): Promise<{ ok: boolean; 
 // Wraps postBody with a tiny inline retry. Quick second attempt catches
 // transient packet loss without waiting for the next 3s GPS tick — which
 // matters because we want the marker to flip back to green ASAP.
-const postWithRetry = async (apiUrl: string, body: PushBody) => {
-  let result = await postBody(apiUrl, body);
-  for (let i = 0; i < PUSH_RETRIES && !result.ok; i++) {
+const postWithRetry = async (apiUrl: string, body: PushBody, headers: Record<string, string>) => {
+  let result = await postBody(apiUrl, body, headers);
+  for (let i = 0; i < PUSH_RETRIES && !result.ok && !esRechazoDeSesion(result.status); i++) {
     // Short backoff: 600ms then 1.5s. Total worst case: 25s + 0.6s + 25s + 1.5s + 25s ≈ 77s.
     await new Promise((r) => setTimeout(r, i === 0 ? 600 : 1500));
-    result = await postBody(apiUrl, body);
+    result = await postBody(apiUrl, body, headers);
   }
   return result;
 };
@@ -213,10 +251,18 @@ const DRAIN_BATCH = 50;
 // when NetInfo reports the device just got connectivity back.
 const drainQueue = async (apiUrl: string) => {
   let sent = 0;
+  const headers = portalHeaders(await getStoredDriver());
   while (pendingQueue.length > 0 && sent < DRAIN_BATCH) {
     sent += 1;
     const next = pendingQueue[0];
-    const res = await postBody(apiUrl, next);
+    const res = await postBody(apiUrl, next, headers);
+    if (!res.ok && esRechazoDeSesion(res.status)) {
+      // Un fijo que el servidor rechaza por sesion no va a entrar nunca: se
+      // descarta para que no tape al resto de la cola.
+      pendingQueue.shift();
+      void persistQueue();
+      continue;
+    }
     if (!res.ok) break;
     pendingQueue.shift();
     // Persist after each successful pop, not just at the end — if the app
@@ -243,8 +289,9 @@ const pushPosition = async (location: Location.LocationObject): Promise<boolean>
     };
     return false;
   }
-  const driverId = await getStoredDriverId();
-  if (!driverId) {
+  const driver = await getStoredDriver();
+  const driverId = driver?.driverId;
+  if (!driver || !driverId) {
     lastPushState = {
       ...lastPushState,
       lastAttemptAt: Date.now(),
@@ -271,7 +318,16 @@ const pushPosition = async (location: Location.LocationObject): Promise<boolean>
   };
 
   lastPushState = { ...lastPushState, lastAttemptAt: Date.now() };
-  const res = await postWithRetry(apiUrl, body);
+  const res = await postWithRetry(apiUrl, body, portalHeaders(driver));
+  if (!res.ok && esRechazoDeSesion(res.status)) {
+    lastPushState = {
+      ...lastPushState,
+      lastStatus: res.status,
+      lastError: 'sesión inválida: otro teléfono entró con este código',
+      consecutiveFailures: lastPushState.consecutiveFailures + 1,
+    };
+    return false;
+  }
   if (!res.ok) {
     // Network/transient failure: queue this fix so the trail can be
     // backfilled when we get connectivity again.
@@ -387,9 +443,52 @@ export const ensureGpsServicesEnabled = async (): Promise<boolean> => {
 
 // Writes a driver session to AsyncStorage so the background TaskManager
 // (which can't be passed a driverId directly) can find it on every fix.
-export const setDriverSession = async (driverId: string): Promise<void> => {
-  const payload = { kind: 'driver', driverId };
+// `sessionId` es la sesion unica del portal; si no viene, se conserva la que
+// ya habia para ese mismo conductor.
+export const setDriverSession = async (driverId: string, sessionId?: string | null): Promise<void> => {
+  const previa = await getStoredDriver();
+  const conservada = previa?.driverId === driverId ? previa.sessionId : null;
+  const payload: StoredSession = {
+    kind: 'driver',
+    driverId,
+    ...(sessionId || conservada ? { sessionId: sessionId || conservada || undefined } : {}),
+  };
   await AsyncStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(payload));
+};
+
+// ── Ahorro de bateria (solo Android) ────────────────────────────────────────
+// Con la optimizacion de bateria activa, Android (y mas aun Xiaomi, Motorola,
+// Samsung) corta el servicio de ubicacion a los minutos de minimizar la app
+// aunque tenga "Permitir todo el tiempo". Esto se informa en tracking.status
+// para que la web lo avise, y hay un dialogo del sistema para desactivarla.
+export const isBatteryOptimizationEnabled = async (): Promise<boolean | null> => {
+  if (Platform.OS !== 'android') return null;
+  try {
+    return await Battery.isBatteryOptimizationEnabledAsync();
+  } catch {
+    return null;
+  }
+};
+
+export const requestIgnoreBatteryOptimization = async (): Promise<boolean> => {
+  if (Platform.OS !== 'android') return false;
+  const paquete = Constants.expoConfig?.android?.package ?? 'app.sevenarena.mobile';
+  try {
+    await IntentLauncher.startActivityAsync(
+      'android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS',
+      { data: `package:${paquete}` },
+    );
+    return true;
+  } catch {
+    // Sin el permiso en el manifiesto o telefono sin ese dialogo: la lista
+    // general de apps optimizadas sirve igual.
+    try {
+      await IntentLauncher.startActivityAsync('android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS');
+      return true;
+    } catch {
+      return false;
+    }
+  }
 };
 
 // getCurrentPositionAsync no acepta timeout y un GPS frio bajo techo puede
@@ -465,13 +564,15 @@ export const startTracking = async (): Promise<boolean> => {
         notificationTitle: 'Seven Arena · tracking activo',
         notificationBody: 'Registrando ubicación para tus traslados.',
         notificationColor: '#21D0B3',
-        // Regla del producto: minimizar = sigue transmitiendo; cerrar (deslizar
-        // la app fuera de recientes) = se detiene. Sin esto el servicio queda
-        // en su default (false): sobrevive al cierre, Android lo relanza solo
-        // (START_REDELIVER_INTENT) y expo-task-manager vuelve a cargar el JS en
-        // segundo plano — en algunos telefonos eso se ve como que la app "se
-        // abre sola". Al reabrirla, resumeTrackingIfEnabled lo rearma.
-        killServiceOnDestroy: true,
+        // 03-10-2026: el rastreo sobrevive a cerrar la app (deslizarla fuera
+        // de recientes) y solo se detiene al cerrar sesion o al apagarlo. Con
+        // killServiceOnDestroy: true (regla del 17-09) los Android mandaban
+        // 6 veces menos GPS que los iPhone: el conductor cerraba la app y el
+        // bus desaparecia hasta que la volvia a abrir. Android relanza el
+        // servicio solo (START_REDELIVER_INTENT) y expo-task-manager carga el
+        // JS en segundo plano; la notificacion "tracking activo" sigue
+        // visible, que es la senal honesta de que se esta transmitiendo.
+        killServiceOnDestroy: false,
       },
       pausesUpdatesAutomatically: false,
       showsBackgroundLocationIndicator: true,

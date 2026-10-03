@@ -36,8 +36,10 @@ import {
   areGpsServicesEnabled,
   ensureGpsServicesEnabled,
   getLastPushState,
+  isBatteryOptimizationEnabled,
   isTrackingRunning,
   pushCurrentPositionNow,
+  requestIgnoreBatteryOptimization,
   resumeTrackingIfEnabled,
   setDriverSession,
   startTracking,
@@ -225,12 +227,16 @@ export default function Home() {
     // Manual GPS-on for the demo: web tells us who the driver is, we persist
     // the session, request both permission levels, push one fix right away
     // and start the continuous task.
+    const sesionDelPayload = (payload: unknown): string | null => {
+      const sessionId = (payload as { sessionId?: unknown } | undefined)?.sessionId;
+      return typeof sessionId === 'string' && sessionId ? sessionId : null;
+    };
     const startDriverTracking = async (payload: unknown) => {
       const driverId = (payload as { driverId?: unknown } | undefined)?.driverId;
       if (typeof driverId !== 'string' || !driverId) {
         throw new Error('driverId requerido');
       }
-      await setDriverSession(driverId);
+      await setDriverSession(driverId, sesionDelPayload(payload));
       const fg = await requestPermission('location');
       if (fg !== 'granted') {
         return {
@@ -280,6 +286,7 @@ export default function Home() {
         backgroundOk: bg === 'granted',
         gpsServices: true,
         running: started,
+        batteryOptimized: await isBatteryOptimizationEnabled(),
       };
     };
     const trackingStarts = new Map<string, ReturnType<typeof startDriverTracking>>();
@@ -296,6 +303,21 @@ export default function Home() {
       await stopTracking();
       return { ok: true, running: false };
     });
+    // La web volvio a reclamar la sesion unica (otro telefono se la habia
+    // tomado): el rastreo nativo tiene que firmar con la nueva.
+    bridge.registerHandler('tracking.session', async (payload) => {
+      const driverId = (payload as { driverId?: unknown } | undefined)?.driverId;
+      if (typeof driverId !== 'string' || !driverId) throw new Error('driverId requerido');
+      await setDriverSession(driverId, sesionDelPayload(payload));
+      return { saved: true };
+    });
+    // Dialogo del sistema "¿Permitir que Seven Arena se ejecute en segundo
+    // plano sin restricciones?" (Android). Sin esto el ahorro de bateria
+    // corta el rastreo a los minutos de minimizar.
+    bridge.registerHandler('device.battery-optimization', async () => {
+      const opened = await requestIgnoreBatteryOptimization();
+      return { opened };
+    });
     bridge.registerHandler('tracking.status', async () => {
       const running = await isTrackingRunning();
       const gpsServices = await areGpsServicesEnabled();
@@ -310,6 +332,7 @@ export default function Home() {
         gpsServices,
         background,
         backgroundOk: background === 'granted',
+        batteryOptimized: await isBatteryOptimizationEnabled(),
         lastPush: getLastPushState(),
       };
     });
@@ -516,6 +539,7 @@ export default function Home() {
       running: boolean;
       gpsServices: boolean;
       background: PermissionState;
+      batteryOptimized: boolean | null;
     } | null = null;
     const tick = async () => {
       try {
@@ -528,21 +552,24 @@ export default function Home() {
         const background = await getBackgroundLocationState().catch(
           () => 'undetermined' as PermissionState,
         );
+        const batteryOptimized = await isBatteryOptimizationEnabled();
         const lastPush = getLastPushState();
         const stateChanged =
           !lastEmitted ||
           lastEmitted.running !== running ||
           lastEmitted.gpsServices !== gpsServices ||
-          lastEmitted.background !== background;
+          lastEmitted.background !== background ||
+          lastEmitted.batteryOptimized !== batteryOptimized;
         const pushChanged = lastPush.lastAttemptAt !== lastEmittedAttemptAt;
         if (stateChanged || pushChanged) {
-          lastEmitted = { running, gpsServices, background };
+          lastEmitted = { running, gpsServices, background, batteryOptimized };
           lastEmittedAttemptAt = lastPush.lastAttemptAt;
           bridgeRef.current?.emit('tracking.statusChanged', {
             running,
             gpsServices,
             background,
             backgroundOk: background === 'granted',
+            batteryOptimized,
             lastPush,
           });
         }
