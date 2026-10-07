@@ -523,7 +523,10 @@ const getPositionWithTimeout = async (): Promise<Location.LocationObject | null>
 export const pushCurrentPositionNow = async (): Promise<boolean> => {
   if (!(await areGpsServicesEnabled())) return false;
   try {
-    const last = await Location.getLastKnownPositionAsync();
+    // Sin maxAge, "la ultima conocida" podia ser de doce horas atras y el
+    // bus aparecia donde durmio (Armando Soza, 07-10-2026: fijo de las
+    // 00:31 enviado a las 12:24).
+    const last = await Location.getLastKnownPositionAsync({ maxAge: 60_000 });
     const loc = last ?? (await getPositionWithTimeout());
     if (!loc) return false;
     await pushPosition(loc);
@@ -542,11 +545,17 @@ export const isTrackingRunning = async (): Promise<boolean> => {
 };
 
 export const startTracking = async (): Promise<boolean> => {
-  // Avoid spinning a second instance if one is already running.
-  if (await isTrackingRunning()) {
-    await AsyncStorage.setItem(TRACKING_ENABLED_KEY, '1');
-    return true;
-  }
+  // OJO: antes, si la tarea ya figuraba registrada, se devolvia true sin
+  // tocar nada. Pero "registrada" no es "entregando": expo-task-manager
+  // persiste la tarea y la restaura al arrancar la app ANTES de que la
+  // actividad este en primer plano, y en ese momento LocationTaskConsumer no
+  // levanta el servicio en primer plano ("cannot be started while the app is
+  // in the background"). Sin servicio, Android entrega un punado de
+  // posiciones por hora: Armando Soza (07-10-2026) con la app abierta,
+  // running: true y dos fijos en cinco minutos; en seis dias, 91 de 293
+  // sesiones Android asi. Registrar de nuevo con las mismas opciones hace
+  // que el consumidor reinicie las actualizaciones y vuelva a levantar el
+  // servicio (TaskService.registerTask -> consumer.setOptions).
   // Foreground is the prerequisite; background is best-effort.
   const fg = await Location.getForegroundPermissionsAsync();
   if (fg.status !== 'granted') return false;
