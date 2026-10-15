@@ -1,0 +1,71 @@
+diff --git a/node_modules/expo-task-manager/android/src/main/java/expo/modules/taskManager/TaskManagerUtils.java b/node_modules/expo-task-manager/android/src/main/java/expo/modules/taskManager/TaskManagerUtils.java
+index c54fb7d..62c21b0 100644
+--- a/node_modules/expo-task-manager/android/src/main/java/expo/modules/taskManager/TaskManagerUtils.java
++++ b/node_modules/expo-task-manager/android/src/main/java/expo/modules/taskManager/TaskManagerUtils.java
+@@ -40,6 +40,13 @@ public class TaskManagerUtils implements TaskManagerUtilsInterface {
+ 
+   private static final int DEFAULT_OVERRIDE_DEADLINE = 60 * 1000; // 1 minute
+ 
++  // Seven Arena (15-10-2026): tope de datos por tarea pendiente. Sin tope, si
++  // Android no ejecuta la tarea (ahorro de batería, pantalla apagada) cada
++  // posición se suma a sus extras y el hilo principal los desarma y rearma en
++  // cada ubicación: ANR y luego OutOfMemoryError (Play Console, 1.0.3). Se
++  // conservan las más recientes.
++  private static final int MAX_PENDING_DATA = 100;
++
+   private static final Set<TaskInterface> sTasksReschedulingJob = new ArraySet<>();
+ 
+   //region TaskManagerUtilsInterface
+@@ -142,7 +149,22 @@ public class TaskManagerUtils implements TaskManagerUtilsInterface {
+     for (JobInfo jobInfo : pendingJobs) {
+       int jobId = jobInfo.getId();
+ 
+-      if (isJobInfoRelatedToTask(jobInfo, task)) {
++      boolean related;
++      try {
++        related = isJobInfoRelatedToTask(jobInfo, task);
++      } catch (OutOfMemoryError | RuntimeException e) {
++        // Seven Arena: una tarea que ya creció sin tope (versiones anteriores)
++        // no se puede ni leer. Se descarta y sus datos viejos se pierden; las
++        // posiciones nuevas siguen en una tarea nueva.
++        Log.e(TAG, "Discarding unreadable pending job " + jobId + ": " + e);
++        try {
++          jobScheduler.cancel(jobId);
++        } catch (RuntimeException ignored) {
++        }
++        continue;
++      }
++
++      if (related) {
+         JobInfo mergedJobInfo = createJobInfoByAddingData(jobInfo, data);
+ 
+         // Add the task to the list of rescheduled tasks.
+@@ -184,7 +206,27 @@ public class TaskManagerUtils implements TaskManagerUtilsInterface {
+         mergedExtras.putPersistableBundle(String.valueOf(dataSize + i), data.get(i));
+       }
+     }
+-    return createJobInfo(jobInfo.getId(), jobInfo.getService(), mergedExtras);
++    return createJobInfo(jobInfo.getId(), jobInfo.getService(), keepNewestData(mergedExtras));
++  }
++
++  // Seven Arena: deja en los extras sólo los últimos MAX_PENDING_DATA datos,
++  // renumerados desde 0 (extractDataFromJobParams los lee de 0 a dataSize-1).
++  private PersistableBundle keepNewestData(PersistableBundle extras) {
++    int dataSize = extras.getInt("dataSize", 0);
++    if (dataSize <= MAX_PENDING_DATA) {
++      return extras;
++    }
++    int dropped = dataSize - MAX_PENDING_DATA;
++    PersistableBundle trimmed = new PersistableBundle();
++    trimmed.putInt(EXTRAS_REQUIRED_KEY, 1);
++    trimmed.putString("appId", extras.getString("appId", ""));
++    trimmed.putString("taskName", extras.getString("taskName", ""));
++    trimmed.putInt("dataSize", MAX_PENDING_DATA);
++    for (int i = 0; i < MAX_PENDING_DATA; i++) {
++      trimmed.putPersistableBundle(String.valueOf(i), extras.getPersistableBundle(String.valueOf(dropped + i)));
++    }
++    Log.w(TAG, "Pending job data capped at " + MAX_PENDING_DATA + " (dropped " + dropped + " oldest)");
++    return trimmed;
+   }
+ 
+   private PendingIntent createTaskIntent(Context context, String appScopeKey, String taskName, int flags) {

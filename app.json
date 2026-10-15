@@ -2,7 +2,7 @@
   "expo": {
     "name": "Seven Arena",
     "slug": "seven-arena",
-    "version": "1.0.3",
+    "version": "1.0.4",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "sevenarenaapp",
@@ -29,7 +29,7 @@
     },
     "android": {
       "package": "app.sevenarena.mobile",
-      "versionCode": 3,
+      "versionCode": 4,
       "googleServicesFile": "./google-services.json",
       "permissions": [
         "android.permission.ACCESS_FINE_LOCATION",
