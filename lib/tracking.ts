@@ -18,8 +18,13 @@ const TRACKING_ENABLED_KEY = 'seven.tracking.enabled';
 // and the trail ends up with a straight line jumping over the offline gap.
 const QUEUE_STORAGE_KEY = 'seven.tracking.queue.v1';
 
-// 3-second cadence as requested by the client.
-const UPDATE_INTERVAL_MS = 3000;
+// Era 3 s (pedido del cliente). 15-10-2026: 10 s. A 3 s Android encolaba
+// ~1.200 posiciones por hora en la tarea del task manager, y con el tope del
+// parche (patches/expo-task-manager) sigue siendo menos trabajo en el hilo
+// principal, batería y datos. El portal da por mudo al shell tras
+// UMBRAL_SIN_FIJOS_MS (frontend/lib/conductor-sondeos.ts), que debe seguir
+// siendo varias veces esta cadencia.
+const UPDATE_INTERVAL_MS = 10000;
 const MIN_DISTANCE_M = 0;
 
 type StoredSession = {
@@ -125,7 +130,7 @@ type PushBody = {
   speed?: number;
   heading?: number;
 };
-// ~30 minutes of offline coverage at the 3s cadence. Raised from 60 after
+// ~30 minutes of offline coverage at the 3s cadence (~100 min at 10 s). Raised from 60 after
 // the Venezuela field test: a 3-minute window was too short for the kind
 // of dead zones we saw (tunnels, cellular gaps in valleys).
 const QUEUE_LIMIT = 600;
