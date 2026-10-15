@@ -18,7 +18,7 @@ const TRACKING_ENABLED_KEY = 'seven.tracking.enabled';
 // and the trail ends up with a straight line jumping over the offline gap.
 const QUEUE_STORAGE_KEY = 'seven.tracking.queue.v1';
 
-// Era 3 s (pedido del cliente). 15-10-2026: 10 s. A 3 s Android encolaba
+// Era 3 s (pedido del cliente). 15-10-2026: 10 s, aceptado por el cliente. A 3 s Android encolaba
 // ~1.200 posiciones por hora en la tarea del task manager, y con el tope del
 // parche (patches/expo-task-manager) sigue siendo menos trabajo en el hilo
 // principal, batería y datos. El portal da por mudo al shell tras
